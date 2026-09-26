@@ -1,0 +1,23 @@
+# Trickpad pilot config for the user's current BTT gesture subset.
+# Source baseline: Trickpad 0.14.0 (e16f7fcd1613b9df944957cbda0e69d8eaf19163)
+
+[GENERAL]
+config-version = 3
+dominant-hand = "right"
+haptic-feedback = true
+menu-bar-icon = "trickpad"
+
+[MOUSE]
+three-finger-swipe-up = "cmd+shift+t"
+three-finger-swipe-down = "cmd+w"
+three-finger-click = "cmd+shift+v"
+
+[TRACKPAD]
+three-finger-click = "cmd+shift+v"
+three-finger-swipe-up = "cmd+shift+t"
+three-finger-swipe-down = "cmd+w"
+three-finger-double-tap = "script:~/bin/trickpad-hide-hovered-dock-app"
+
+# The two required 2-finger horizontal trackpad gestures remain native macOS:
+# left = Page Forward, right = Page Back.
+# Trickpad does not provide 2-finger trackpad swipe bindings.

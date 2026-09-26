@@ -568,3 +568,32 @@ Retest contract:
 3. Select Keyboard / Mouse / Trackpad and confirm the middle list changes without losing the selected application scope.
 4. Confirm each row is readable as **trigger** on line 1 and **Action: concrete target** on line 2, including Fn shortcuts and Bluetooth/Shortcuts actions.
 5. Confirm selecting a row still opens the same editable rule/action configuration on the right.
+
+
+## TP01 — Define the unmodified Trickpad pilot
+
+Status: complete.
+
+Decision:
+- Do not fork or customize Trickpad yet.
+- Use upstream Trickpad 0.14.0 unchanged for a real-device pilot.
+- Keep this work isolated on branch `trickpad-pilot`; do not merge it into the BTT Lite runtime while the pilot is being evaluated.
+- Pin the pilot to upstream commit `e16f7fcd1613b9df944957cbda0e69d8eaf19163` so builds are reproducible.
+
+Gesture mapping:
+- Magic Mouse: 3-finger swipe up → ⇧⌘T; 3-finger swipe down → ⌘W; 3-finger click → ⇧⌘V.
+- Built-in trackpad: 3-finger click → ⇧⌘V; 3-finger swipe up → ⇧⌘T; 3-finger swipe down → ⌘W; 3-finger double-tap → activate hovered Dock app then ⌘H.
+- Trackpad 2-finger swipe left/right are intentionally left to macOS native “Swipe between pages” because Trickpad 0.14.0 only exposes 3–4 finger trackpad swipes. Native left/right behavior matches Page Forward/Page Back.
+
+Resource/installation constraints:
+- No Homebrew.
+- No local Xcode or Command Line Tools on the user's Mac.
+- The Dock helper must be short-lived and installed in `~/bin`; it must not become another resident process.
+- CI will build the upstream app and helper.
+
+Files added:
+- `experiments/trickpad-pilot/README.md`
+- `experiments/trickpad-pilot/config.toml`
+
+Next commit:
+- TP02: add CI that builds the pinned upstream source without modifying it, compile the on-demand Dock helper, and package a ready-to-install pilot.
