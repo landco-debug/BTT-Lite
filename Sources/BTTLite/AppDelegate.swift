@@ -7,12 +7,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = ConfigStore.shared
     private lazy var actionRunner = ActionRunner()
     private lazy var keyboardEngine = KeyboardEngine(store: store, runner: actionRunner)
+    private lazy var gestureEngine = GestureEngine(store: store, runner: actionRunner)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
         keyboardEngine.start(promptForPermission: true)
+        gestureEngine.start()
         NotificationCenter.default.addObserver(forName: .bttLiteConfigDidChange, object: store, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.keyboardEngine.start(promptForPermission: false) }
+            Task { @MainActor in
+                self?.keyboardEngine.start(promptForPermission: false)
+                self?.gestureEngine.start()
+            }
         }
     }
 

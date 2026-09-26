@@ -96,3 +96,31 @@ Changes:
 Validation:
 - These changes address every source compile error reported by the C02.1 macOS 15 arm64 workflow.
 - A new CI run is triggered by this commit.
+
+
+## C03 — Native Magic Mouse and trackpad gesture engine
+
+Status: implemented; GitHub Actions will verify the macOS 15 arm64 compile.
+
+Changes:
+- Added a tiny in-project bridge that runtime-loads Apple's private `MultitouchSupport.framework` with `dlopen/dlsym`; there is no third-party runtime package and no polling loop.
+- Enumerates all current multitouch devices with `MTDeviceCreateList` and classifies built-in/external trackpads versus Magic Mouse using built-in status plus IORegistry product/surface metadata.
+- Private contact-layout assumptions are isolated in one file and guarded by contact-count/state/range checks so later macOS compatibility fixes remain localized.
+- Added a lock-protected, pure-Swift recognizer core for configurable N-finger left/right/up/down swipes and N-finger double-taps.
+- Added physical N-finger click recognition by correlating a narrow CoreGraphics mouse-click tap with the most recent live raw-touch frame; matched configured clicks suppress the original down/up pair so the normal click is not accidentally executed as well.
+- Gesture matching respects enabled state, active profile and application bundle scope, then reuses the existing sequential `ActionRunner`.
+- The raw-touch bridge is started only while the active profile actually contains enabled gesture rules; the click event tap is installed only if an enabled physical-click rule exists.
+- Input Monitoring is requested only when gestures are enabled; Accessibility is requested for physical-click interception when needed.
+- Added explicit IOKit linkage to the main target for lightweight device classification.
+- No GUI expansion was needed: the C01 editor already exposes device, finger count, gesture kind and swipe direction for every gesture rule.
+
+Validation performed before commit:
+- Main target and Bluetooth-helper sources parse successfully under Swift 6.2 on Linux.
+- Pure recognizer test passes for a two-finger left swipe and a three-finger double-tap.
+- C02.2 macOS 15 arm64 GitHub Actions build is green before layering C03.
+
+Compatibility note:
+- `MultitouchSupport.framework` is a private Apple framework. It is runtime-loaded and isolated deliberately; App Sandbox must remain disabled. If Apple changes the private ABI in a future macOS release, `MultitouchBridge.swift` is the single repair point.
+
+Next planned commit:
+- C04: close remaining imported-action gaps (on-demand JavaScript selection transform and clipboard-history behavior), then package a testable artifact and measure real idle RSS/CPU on the user's M1.

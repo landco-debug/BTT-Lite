@@ -11,7 +11,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "BTTLite",
-            path: "Sources/BTTLite"
+            path: "Sources/BTTLite",
+            linkerSettings: [.linkedFramework("IOKit")]
         ),
         .executableTarget(
             name: "BTTLiteBluetoothHelper",
