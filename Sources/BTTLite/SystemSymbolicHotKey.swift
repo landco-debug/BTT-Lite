@@ -15,11 +15,24 @@ enum SystemSymbolicHotKeyResolver {
     private static let rootKey = "AppleSymbolicHotKeys"
 
     static func current(id: Int) -> SystemSymbolicHotKey? {
-        guard let domainValues = UserDefaults.standard.persistentDomain(forName: domain),
-              let hotKeys = domainValues[rootKey] as? [String: Any] else {
+        let appID = domain as CFString
+        CFPreferencesAppSynchronize(appID)
+        guard let raw = CFPreferencesCopyAppValue(rootKey as CFString, appID),
+              let hotKeys = raw as? [String: Any] else {
+            return defaultShortcut(id: id)
+        }
+        return parse(id: id, hotKeys: hotKeys) ?? defaultShortcut(id: id)
+    }
+
+    private static func defaultShortcut(id: Int) -> SystemSymbolicHotKey? {
+        switch id {
+        case 79:
+            return SystemSymbolicHotKey(keyCode: 123, modifiers: [.control, .function])
+        case 81:
+            return SystemSymbolicHotKey(keyCode: 124, modifiers: [.control, .function])
+        default:
             return nil
         }
-        return parse(id: id, hotKeys: hotKeys)
     }
 
     static func parse(id: Int, hotKeys: [String: Any]) -> SystemSymbolicHotKey? {

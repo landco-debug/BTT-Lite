@@ -442,3 +442,48 @@ Retest contract:
 2. Release Fn, then type 1234567890 normally: no action should fire.
 3. Fn+4 disconnect: status 0 must be treated as success with no error dialog. Press Fn+4 again once to reconnect; if openConnection returns timeout, report that exact error and stop—no retries are generated.
 4. Magic Mouse 3-finger left/right: the current System Settings Mission Control shortcut is now used exactly. If the system's “Move left/right a space” shortcuts themselves are disabled/conflicted, BTT's documented behavior also depends on fixing them.
+
+
+## C13 — Magic Mouse fast-path reliability and conservative Bluetooth reconnect hardening
+
+Status: implemented after C12 on-device retest; macOS CI validation pending at commit time.
+
+Observed C12 behavior:
+- Fn+4 reliably disconnects the configured Bluetooth receiver, but reconnect succeeds only about every other attempt.
+- Magic Mouse 3-finger Space swipes are recognized only around one time in ten, often appear to work in only one direction, and sometimes the Space transition happens noticeably after the physical swipe.
+- Ordinary digit entry is no longer reported broken, so C13 keeps the C12 Fn state machine unchanged.
+
+Root causes / design corrections:
+- C08's 75 ms settle window, three confirmation frames and 6% travel were deliberately conservative after Trackpad wrong-axis bugs. Those same thresholds are too slow/strict for the much smaller Magic Mouse surface.
+- MultitouchSupport state 5 is BreakTouch: the final position-bearing touch sample. BTT Lite previously discarded it, so a fast mouse swipe could lose the final sample that crossed the distance threshold.
+- Same-count contact identity replacement cancelled the entire gesture. On Magic Mouse a brief contact loss/reacquire should instead safely rebase the measurement.
+- BetterTouchTool uses the current macOS Mission Control shortcuts for Move Left/Right a Space. The resolver therefore needs the effective com.apple.symbolichotkeys preference, not BTT Lite's app-local UserDefaults cache.
+- Bluetooth reconnect can race remote profile teardown. Apple's IOBluetooth API provides a synchronous openConnection overload with an explicit page timeout, so reliability can be improved with one longer request rather than repeated commands.
+
+Magic Mouse changes:
+- Multitouch bridge now accepts MakeTouch, Touching and BreakTouch samples (states 3...5).
+- Contact identity now uses the actual fingerID field (offset 24) rather than pathIndex.
+- The framework touch timestamp is propagated into recognition instead of replacing it with callback scheduling time.
+- Trackpad thresholds remain unchanged.
+- Magic Mouse gets a dedicated fast path: 35 ms settle, 4% trigger travel, 1.8% lock travel, two confirming frames, 1.25 lock dominance and 1.30 final dominance.
+- Same-count identity replacement on Magic Mouse rebases after the short settle window instead of cancelling the session. Trackpad retains C08's stricter behavior.
+- Regression tests cover fast three-finger horizontal swipes in both directions and identity replacement during a swipe.
+
+Mission Control dispatch:
+- SystemSymbolicHotKeyResolver now synchronizes and reads the effective com.apple.symbolichotkeys CFPreferences domain directly.
+- The exact configured key/modifier tuple is still preferred; modern Control+Fn+Arrow remains fallback only if no tuple can be read.
+- The synthetic Mission Control key-down is held for 12 ms before key-up instead of being a zero-duration chord.
+- The standard animated BTT action semantics are preserved; no private/no-animation Space switch was substituted.
+
+Bluetooth reconnect changes:
+- Bluetooth toggles are serialized. A second Fn+4 cannot start another helper while one synchronous IOBluetooth operation is still in flight.
+- After a successful disconnect, an immediate reconnect waits only until a 1.25 s teardown quiet period has elapsed.
+- Connect issues exactly one openConnection request with page timeout 0x4000 (about 10.24 s).
+- If the request returns non-success but the device is already connected, or becomes connected during a short 750 ms passive observation window, the action succeeds.
+- No automatic connect retry and no disconnect retry are issued.
+
+Retest contract:
+1. Magic Mouse: 20 three-finger swipes left and 20 right. Both directions should trigger at comparable rates and response should start during the swipe rather than after a long pause.
+2. Trackpad: quick sanity test of existing three-finger directions; its C08 thresholds were not changed.
+3. Bluetooth: disconnect once with Fn+4, then reconnect once. If reconnect still fails, report the exact C13 error/status rather than repeatedly retrying.
+4. Fn+1..Fn+6 and ordinary digits should behave exactly as in C12; C13 does not alter Fn recognition.

@@ -10,6 +10,8 @@ struct GestureRecognizerRegression {
         testFingerDropDoesNotBecomeLowerFingerSwipe()
         testSlowDeliberateSwipeStillTriggers()
         testThreeFingerDoubleTapSurvivesSequentialLanding()
+        testMagicMouseFastHorizontalSwipesBothDirections()
+        testMagicMouseRecoversFromSameCountIdentityReplacement()
         print("GestureRecognizerRegression: OK")
     }
 
@@ -179,6 +181,46 @@ struct GestureRecognizerRegression {
         ])
         assert(out.contains { $0.kind == .swipe && $0.direction == .right },
                "slow deliberate swipe should not look like a hung recognizer")
+    }
+
+    static func testMagicMouseFastHorizontalSwipesBothDirections() {
+        for (dx, expected) in [(-0.055, GestureDirection.left), (0.055, GestureDirection.right)] {
+            let core = GestureRecognizerCore()
+            let base = contacts(3)
+            let out = feed(core, [
+                (0.000, base),
+                (0.040, base),
+                (0.055, shifted(base, dx: dx * 0.45, dy: 0.003)),
+                (0.073, shifted(base, dx: dx * 0.75, dy: 0.004)),
+                (0.091, shifted(base, dx: dx, dy: 0.005)),
+                (0.110, [])
+            ], device: .magicMouse)
+
+            assert(out.contains { $0.kind == .swipe && $0.fingers == 3 && $0.direction == expected },
+                   "fast Magic Mouse 3F \(expected) swipe was missed")
+        }
+    }
+
+    static func testMagicMouseRecoversFromSameCountIdentityReplacement() {
+        let core = GestureRecognizerCore()
+        let base = contacts(3)
+        let replacement = base.enumerated().map { index, c in
+            RawTouchContact(id: index + 11, x: c.x, y: c.y, size: c.size)
+        }
+        let out = feed(core, [
+            (0.000, base),
+            (0.040, base),
+            (0.055, shifted(base, dx: 0.018, dy: 0.002)),
+            (0.070, replacement),
+            (0.108, replacement),
+            (0.125, shifted(replacement, dx: 0.024, dy: 0.002)),
+            (0.145, shifted(replacement, dx: 0.040, dy: 0.003)),
+            (0.165, shifted(replacement, dx: 0.055, dy: 0.004)),
+            (0.185, [])
+        ], device: .magicMouse)
+
+        assert(out.contains { $0.kind == .swipe && $0.fingers == 3 && $0.direction == .right },
+               "Magic Mouse same-count identity replacement cancelled the remaining swipe")
     }
 
     static func testThreeFingerDoubleTapSurvivesSequentialLanding() {

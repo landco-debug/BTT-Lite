@@ -74,15 +74,34 @@ if device.isConnected() {
     print("disconnected")
     exit(0)
 } else {
-    let status = device.openConnection()
-    guard status == kIOReturnSuccess else {
-        fputs(
-            "Bluetooth connect failed: \(ioReturnDescription(status)) (\(status)). " +
-            "No automatic retry was made.\n",
-            stderr
-        )
-        exit(3)
+    // One longer synchronous page request is safer than repeated connect commands
+    // for a receiver that is still waking or tearing down profiles.
+    let pageTimeout: BluetoothHCIPageTimeout = 0x4000
+    let status = device.openConnection(
+        nil,
+        withPageTimeout: pageTimeout,
+        authenticationRequired: false
+    )
+
+    if status == kIOReturnSuccess || device.isConnected() {
+        print("connected")
+        exit(0)
     }
-    print("connected")
-    exit(0)
+
+    // Observe a possible late completion briefly without issuing another request.
+    let deadline = Date().addingTimeInterval(0.75)
+    while Date() < deadline {
+        if device.isConnected() {
+            print("connected")
+            exit(0)
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    fputs(
+        "Bluetooth connect failed: \(ioReturnDescription(status)) (\(status)). " +
+        "One extended-timeout request was made; no automatic retry was issued.\n",
+        stderr
+    )
+    exit(3)
 }

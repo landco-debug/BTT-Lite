@@ -28,21 +28,28 @@ final class GestureRecognizerCore {
     struct Thresholds {
         /// Normalized surface distance required before a Trackpad swipe fires.
         var swipeDistance: Double = 0.078
-        /// Magic Mouse has a much smaller usable touch surface.
-        var magicMouseSwipeDistance: Double = 0.060
+        /// Magic Mouse has a much smaller usable touch surface and much shorter
+        /// practical finger travel than a trackpad. Keep its thresholds separate so
+        /// improving mouse responsiveness cannot regress the stricter trackpad logic.
+        var magicMouseSwipeDistance: Double = 0.040
         /// Movement needed before we even consider locking a direction.
         var axisLockDistance: Double = 0.036
-        var magicMouseAxisLockDistance: Double = 0.028
+        var magicMouseAxisLockDistance: Double = 0.018
         /// Dominant axis must beat the other axis by this factor to become a candidate.
         var axisLockDominance: Double = 1.45
+        var magicMouseAxisLockDominance: Double = 1.25
         /// The same direction must remain dominant for multiple frames before it is locked.
         var axisConfirmationFrames: Int = 3
+        var magicMouseAxisConfirmationFrames: Int = 2
         /// Final trigger requires stronger confidence than the initial axis lock.
         var swipeTriggerDominance: Double = 1.60
+        var magicMouseSwipeTriggerDominance: Double = 1.30
         /// Give the intended number of fingers time to land before measuring motion.
         var fingerSettleDuration: TimeInterval = 0.075
+        var magicMouseFingerSettleDuration: TimeInterval = 0.035
         /// Avoid treating contact-placement jitter as an ultra-fast swipe.
         var minimumSwipeDuration: TimeInterval = 0.035
+        var magicMouseMinimumSwipeDuration: TimeInterval = 0.020
         /// Deliberate slow swipes should still work.
         var maximumSwipeDuration: TimeInterval = 1.75
         var tapMovement: Double = 0.045
@@ -143,8 +150,12 @@ final class GestureRecognizerCore {
             // Replacing one contact with another while keeping the same count is not a
             // clean tap/swipe; conservatively cancel the session's recognizers.
             if sameCountReplacement {
-                state.swipeSuppressedUntilLift = true
-                state.tapEligible = false
+                if device == .magicMouse {
+                    state.tapEligible = false
+                } else {
+                    state.swipeSuppressedUntilLift = true
+                    state.tapEligible = false
+                }
             }
 
             state.contactIDs = ids
@@ -167,7 +178,10 @@ final class GestureRecognizerCore {
         state.lastY = centroid.y
 
         if !state.trackingReady {
-            guard uptime - state.lastMembershipChangeUptime >= thresholds.fingerSettleDuration else {
+            let settleDuration = device == .magicMouse
+                ? thresholds.magicMouseFingerSettleDuration
+                : thresholds.fingerSettleDuration
+            guard uptime - state.lastMembershipChangeUptime >= settleDuration else {
                 return []
             }
 
@@ -207,13 +221,25 @@ final class GestureRecognizerCore {
         let triggerDistance = device == .magicMouse
             ? thresholds.magicMouseSwipeDistance
             : thresholds.swipeDistance
+        let lockDominance = device == .magicMouse
+            ? thresholds.magicMouseAxisLockDominance
+            : thresholds.axisLockDominance
+        let confirmationFrames = device == .magicMouse
+            ? thresholds.magicMouseAxisConfirmationFrames
+            : thresholds.axisConfirmationFrames
+        let triggerDominance = device == .magicMouse
+            ? thresholds.magicMouseSwipeTriggerDominance
+            : thresholds.swipeTriggerDominance
+        let minimumDuration = device == .magicMouse
+            ? thresholds.magicMouseMinimumSwipeDuration
+            : thresholds.minimumSwipeDuration
 
         if state.lockedDirection == nil {
             if let candidate = Self.dominantDirection(
                 dx: dx,
                 dy: dy,
                 minimumDistance: lockDistance,
-                dominance: thresholds.axisLockDominance
+                dominance: lockDominance
             ) {
                 if candidate == state.candidateDirection {
                     state.candidateFrames += 1
@@ -222,7 +248,7 @@ final class GestureRecognizerCore {
                     state.candidateFrames = 1
                 }
 
-                if state.candidateFrames >= max(1, thresholds.axisConfirmationFrames) {
+                if state.candidateFrames >= max(1, confirmationFrames) {
                     state.lockedDirection = candidate
                 }
             } else {
@@ -233,7 +259,7 @@ final class GestureRecognizerCore {
             }
         }
 
-        guard duration >= thresholds.minimumSwipeDuration,
+        guard duration >= minimumDuration,
               let locked = state.lockedDirection else {
             return []
         }
@@ -241,7 +267,7 @@ final class GestureRecognizerCore {
         let components = Self.components(for: locked, dx: dx, dy: dy)
         guard components.primary > 0,
               components.primary >= triggerDistance,
-              components.primary >= components.orthogonal * thresholds.swipeTriggerDominance else {
+              components.primary >= components.orthogonal * triggerDominance else {
             return []
         }
 

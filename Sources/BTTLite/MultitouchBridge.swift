@@ -28,13 +28,14 @@ final class MultitouchBridge {
 
     private enum ContactLayout {
         static let stride = 96
-        static let identifier = 16
+        static let pathIdentifier = 16
         static let state = 20
+        static let fingerIdentifier = 24
         static let positionX = 32
         static let positionY = 36
         static let size = 48
         static let maximumContacts = 32
-        static let touchingStates: ClosedRange<Int32> = 3...4
+        static let positionBearingStates: ClosedRange<Int32> = 3...5
     }
 
     private let handle: UnsafeMutableRawPointer?
@@ -50,7 +51,7 @@ final class MultitouchBridge {
     private(set) var devices: [Device] = []
 
     private static let handlerLock = NSLock()
-    private static var frameHandler: ((UnsafeMutableRawPointer, [RawTouchContact]) -> Void)?
+    private static var frameHandler: ((UnsafeMutableRawPointer, [RawTouchContact], TimeInterval) -> Void)?
 
     init() {
         let library = dlopen(Self.frameworkPath, RTLD_NOW | RTLD_LOCAL)
@@ -101,10 +102,13 @@ final class MultitouchBridge {
         devices = discovered
         let byID = Dictionary(uniqueKeysWithValues: discovered.map { ($0.id, $0) })
 
-        Self.setFrameHandler { reference, contacts in
+        Self.setFrameHandler { reference, contacts, timestamp in
             let id = UInt(bitPattern: reference)
             guard let device = byID[id] else { return }
-            handler(device, contacts, ProcessInfo.processInfo.systemUptime)
+            let eventTime = timestamp.isFinite && timestamp > 0
+                ? timestamp
+                : ProcessInfo.processInfo.systemUptime
+            handler(device, contacts, eventTime)
         }
 
         for device in discovered {
@@ -160,19 +164,19 @@ final class MultitouchBridge {
             .takeRetainedValue() as? NSNumber)?.doubleValue
     }
 
-    private static func setFrameHandler(_ handler: ((UnsafeMutableRawPointer, [RawTouchContact]) -> Void)?) {
+    private static func setFrameHandler(_ handler: ((UnsafeMutableRawPointer, [RawTouchContact], TimeInterval) -> Void)?) {
         handlerLock.lock()
         frameHandler = handler
         handlerLock.unlock()
     }
 
-    private static func currentFrameHandler() -> ((UnsafeMutableRawPointer, [RawTouchContact]) -> Void)? {
+    private static func currentFrameHandler() -> ((UnsafeMutableRawPointer, [RawTouchContact], TimeInterval) -> Void)? {
         handlerLock.lock()
         defer { handlerLock.unlock() }
         return frameHandler
     }
 
-    private static let contactCallback: ContactCallback = { device, touches, count, _, _ in
+    private static let contactCallback: ContactCallback = { device, touches, count, timestamp, _ in
         guard let device, let handler = MultitouchBridge.currentFrameHandler() else { return 0 }
         guard count >= 0, count <= ContactLayout.maximumContacts else { return 0 }
 
@@ -182,7 +186,7 @@ final class MultitouchBridge {
             for index in 0..<Int(count) {
                 let record = touches.advanced(by: index * ContactLayout.stride)
                 let state = record.load(fromByteOffset: ContactLayout.state, as: Int32.self)
-                guard ContactLayout.touchingStates.contains(state) else { continue }
+                guard ContactLayout.positionBearingStates.contains(state) else { continue }
 
                 let x = record.load(fromByteOffset: ContactLayout.positionX, as: Float32.self)
                 let y = record.load(fromByteOffset: ContactLayout.positionY, as: Float32.self)
@@ -190,14 +194,14 @@ final class MultitouchBridge {
                 guard x.isFinite, y.isFinite else { continue }
 
                 parsed.append(RawTouchContact(
-                    id: Int(record.load(fromByteOffset: ContactLayout.identifier, as: Int32.self)),
+                    id: Int(record.load(fromByteOffset: ContactLayout.fingerIdentifier, as: Int32.self)),
                     x: min(max(Double(x), 0), 1),
                     y: min(max(Double(y), 0), 1),
                     size: size.isFinite ? Double(size) : 0
                 ))
             }
         }
-        handler(device, parsed)
+        handler(device, parsed, timestamp)
         return 0
     }
 }

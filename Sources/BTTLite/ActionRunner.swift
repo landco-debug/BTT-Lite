@@ -17,6 +17,8 @@ final class ActionRunner {
     }
 
     private var recentCloseTarget: RecentCloseTarget?
+    private var bluetoothToggleInFlight = false
+    private var lastBluetoothDisconnectAt: Date?
 
     func execute(_ rule: Rule) {
         let actions = rule.actions.filter(\.enabled)
@@ -194,7 +196,7 @@ final class ActionRunner {
 
     private func sendSpaceShortcut(symbolicHotKeyID: Int, fallbackKeyCode: UInt16) {
         if let configured = SystemSymbolicHotKeyResolver.current(id: symbolicHotKeyID) {
-            sendKeyCode(configured.keyCode, modifiers: configured.modifiers)
+            sendKeyCode(configured.keyCode, modifiers: configured.modifiers, holdDuration: 0.012)
             return
         }
 
@@ -202,10 +204,15 @@ final class ActionRunner {
         // This fallback is only used if the user's symbolic-hotkey preference cannot
         // be read. Normally we use the exact System Settings value above, like BTT.
         NSLog("BTT Lite: Mission Control symbolic hotkey %d could not be resolved; using fallback", symbolicHotKeyID)
-        sendKeyCode(fallbackKeyCode, modifiers: [.control, .function])
+        sendKeyCode(fallbackKeyCode, modifiers: [.control, .function], holdDuration: 0.012)
     }
 
-    private func sendKeyCode(_ keyCode: UInt16, modifiers: ModifierSet, targetPID: pid_t? = nil) {
+    private func sendKeyCode(
+        _ keyCode: UInt16,
+        modifiers: ModifierSet,
+        targetPID: pid_t? = nil,
+        holdDuration: TimeInterval = 0
+    ) {
         // A HID-state source plus flags on the actual key event is enough for ordinary
         // AppKit shortcuts and for Mission Control's Ctrl+←/→ on macOS Sequoia.
         //
@@ -241,6 +248,9 @@ final class ActionRunner {
         }
 
         post(true)
+        if holdDuration > 0 {
+            Thread.sleep(forTimeInterval: holdDuration)
+        }
         post(false)
     }
 
@@ -298,11 +308,36 @@ final class ActionRunner {
     }
 
     private func toggleBluetoothDevice(address: String, name: String) async {
+        guard !bluetoothToggleInFlight else {
+            NSLog("BTT Lite: ignored overlapping Bluetooth toggle")
+            return
+        }
+        bluetoothToggleInFlight = true
+        defer { bluetoothToggleInFlight = false }
+
+        if let lastDisconnect = lastBluetoothDisconnectAt {
+            let elapsed = Date().timeIntervalSince(lastDisconnect)
+            let minimumGap: TimeInterval = 1.25
+            if elapsed < minimumGap {
+                let remaining = minimumGap - elapsed
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            }
+        }
+
         let result = await runProcessResult(
             bundledHelperURL("BTTLiteBluetoothHelper").path,
             arguments: [address, name]
         )
-        guard result.status != 0 else { return }
+
+        let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.status == 0 {
+            if output == "disconnected" {
+                lastBluetoothDisconnectAt = Date()
+            } else if output == "connected" {
+                lastBluetoothDisconnectAt = nil
+            }
+            return
+        }
 
         let detail = !result.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? result.error.trimmingCharacters(in: .whitespacesAndNewlines)
