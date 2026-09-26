@@ -622,3 +622,29 @@ Still intentionally native:
 
 Next:
 - Wait for this workflow to turn green. Do not hand the pilot to the user until the upstream checks, build, signatures, helper compile, and package smoke checks all pass.
+
+
+## TP03 — Green CI and ready-to-test pilot artifact
+
+Status: complete.
+
+Validation:
+- GitHub Actions run `36278333271` completed with conclusion `success`.
+- Upstream Trickpad 0.14.0 was fetched at exactly `e16f7fcd1613b9df944957cbda0e69d8eaf19163`.
+- Upstream `scripts/check.sh` completed successfully before packaging.
+- The upstream Trickpad source was not patched.
+- The on-demand Dock helper compiled successfully for Apple Silicon/macOS 15+, received its stable ad-hoc designated requirement, and passed strict code-sign verification.
+- Package smoke tests verified both signatures and the exact gesture bindings before upload.
+- Artifact `Trickpad-Pilot-0.14.0` was uploaded successfully.
+
+Artifact identity:
+- Actions artifact ID: `10917946628`.
+- Actions run: `36278333271`.
+- Outer artifact SHA-256 reported by GitHub: `037830779de1d006e772548f83fd35f16fe5bde5fb9a7a79fa1022f4c471fd45`.
+- Ready-to-install inner ZIP SHA-256 after extraction: `2e42a0b642297e15b4a00e213ba55e1e3828775cddc63027af8f8d05862b38d5`.
+
+On-device test gate:
+- No Trickpad source customization should begin until this pilot is tested on the MacBook Air M1.
+- First test only the agreed 3 Magic Mouse + 6 trackpad behaviors.
+- Trackpad 2-finger left/right remain native macOS page navigation by design.
+- If the pilot proves reliable, the next decision is whether the menu-bar/updater/UI footprint is acceptable or whether a minimal custom/headless fork is justified.
