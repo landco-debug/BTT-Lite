@@ -17,6 +17,23 @@ jobs:
           swift --version
       - name: Build application
         run: ./scripts/build-app.sh
+      - name: Smoke test packaged app
+        run: |
+          set -euo pipefail
+          APP="dist/BTT Lite.app"
+          test -x "$APP/Contents/MacOS/BTTLite"
+          test -x "$APP/Contents/Helpers/BTTLiteBluetoothHelper"
+          test -x "$APP/Contents/Helpers/BTTLiteJavaScriptHelper"
+          /usr/bin/codesign --verify --deep --strict "$APP"
+          /usr/bin/file "$APP/Contents/MacOS/BTTLite" | /usr/bin/grep -q "arm64"
+          printf '%s' '{"script":"async (text) => text.toUpperCase()","text":"hello"}'             | "$APP/Contents/Helpers/BTTLiteJavaScriptHelper" > /tmp/btt-js-smoke.json
+          /usr/bin/python3 - <<'PY'
+          import json
+          with open("/tmp/btt-js-smoke.json", "r", encoding="utf-8") as f:
+              value = json.load(f)
+          assert value == {"ok": True, "result": "HELLO", "error": None}, value
+          PY
+          test -s dist/BTT-Lite-arm64.zip
       - name: Upload application
         uses: actions/upload-artifact@v4
         with:

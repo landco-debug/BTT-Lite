@@ -149,3 +149,22 @@ Validation performed before commit:
 
 Next planned commit:
 - C05: produce the first installable test artifact from CI, add lightweight runtime diagnostics for RSS/CPU/device status, and use the user's real preset for on-device functional testing without committing personal preset data.
+
+
+## C05 — CI smoke validation for the first test artifact
+
+Status: implemented.
+
+Changes:
+- Added post-build checks on the same macOS 15 arm64 runner that produces the distributable.
+- CI verifies the main executable and both on-demand helpers are present and executable inside the app bundle.
+- CI runs strict deep code-signature verification and asserts that the main executable is arm64.
+- CI executes the JavaScript helper with an async no-network transform and requires the exact `HELLO` JSON result, proving JavaScriptCore/Promise/helper IPC works before an artifact is uploaded.
+- CI also requires the final inner `BTT-Lite-arm64.zip` to exist and be non-empty.
+
+Release/testing policy:
+- Do not hand a build to the user as the current test build unless this smoke stage and the full workflow are green.
+- The GitHub Actions artifact is an outer archive containing the ready-to-install inner `BTT-Lite-arm64.zip`.
+
+Next step after green CI:
+- Hand the inner ZIP to the user for real-device testing on the MacBook Air M1: import the supplied BTT preset, grant Accessibility/Input Monitoring, test keyboard + Magic Mouse + trackpad rules, then measure idle RSS/CPU before adding more optional features.
