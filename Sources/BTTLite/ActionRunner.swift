@@ -4,7 +4,10 @@ import Foundation
 
 @MainActor
 final class ActionRunner {
-    static let syntheticEventTag: Int64 = 0x4254544C495445 // "BTTLITE"
+    // Compatibility marker used by RuSwitcher 3.3.0 to ignore synthetic events.
+    // It is harmless when RuSwitcher is not installed and prevents injected
+    // shortcuts from entering RuSwitcher's word-conversion buffer.
+    static let syntheticEventTag: Int64 = 0x52555300
 
     func execute(_ rule: Rule) {
         let actions = rule.actions.filter(\.enabled)
@@ -143,8 +146,9 @@ final class ActionRunner {
             PhysicalModifier(member: .command, keyCode: 55, flag: .maskCommand)
         ]
 
-        func post(_ code: CGKeyCode, down: Bool, flags: CGEventFlags) {
+        func post(_ code: CGKeyCode, down: Bool, flags: CGEventFlags, type: CGEventType? = nil) {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { return }
+            if let type { event.type = type }
             event.flags = flags
             event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
             event.post(tap: .cghidEventTap)
@@ -156,7 +160,7 @@ final class ActionRunner {
 
         for modifier in physical where modifiers.contains(modifier.member) {
             flags.insert(modifier.flag)
-            post(modifier.keyCode, down: true, flags: flags)
+            post(modifier.keyCode, down: true, flags: flags, type: .flagsChanged)
         }
 
         post(CGKeyCode(keyCode), down: true, flags: flags)
@@ -164,7 +168,7 @@ final class ActionRunner {
 
         for modifier in physical.reversed() where modifiers.contains(modifier.member) {
             flags.remove(modifier.flag)
-            post(modifier.keyCode, down: false, flags: flags)
+            post(modifier.keyCode, down: false, flags: flags, type: .flagsChanged)
         }
     }
 

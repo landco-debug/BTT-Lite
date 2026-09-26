@@ -214,3 +214,32 @@ Preset discrepancy found during diagnosis:
 Next validation:
 - GitHub macOS 15 arm64 compile/sign/smoke workflow.
 - Then retest on the user's M1: Trackpad 3 Finger Click, 3 Finger Double-Tap, ⌘L Translate&Replace, Fn+4 Bluetooth, Magic Mouse 3 Finger Space swipes, system alert sounds and Settings window ordering.
+
+
+## C07 — Shortcut editor UX and RuSwitcher 3.3.0 compatibility
+
+Status: implemented; macOS CI validation pending at commit time.
+
+User report addressed:
+- The bottom-left + appeared to do nothing while the Trackpad category filter was active.
+- A duplicated Trackpad swipe could be changed to Down, but assigning ⌘W required raw key-code/modifier numbers and was not understandable.
+- With RuSwitcher 3.3.0 running, BTT Lite synthetic key events polluted RuSwitcher's conversion buffer, producing repeated "aaaa/фффф" and system sounds.
+
+Root causes:
+- `addRule()` always created a Keyboard rule. Under the Trackpad/Magic Mouse/Application filtered views the new rule was immediately hidden, so the button looked broken.
+- The editor exposed only raw keyCode/modifier fields for Send Keyboard Shortcut actions.
+- RuSwitcher 3.3.0's `KeyboardMonitor.swift` ignores synthetic events carrying marker `0x52555300`. BTT Lite used a different marker, so RuSwitcher processed BTT Lite's injected shortcuts as typing.
+- BTT Lite consumed configured hotkey key-down events but previously let their key-up events through.
+
+Changes:
+- + now creates a trigger matching the current category so the new row remains visible.
+- Added one-shot native shortcut recorders for Keyboard triggers and Send Keyboard Shortcut actions. Press Record, then press the desired shortcut; Esc cancels. Raw fields remain available for advanced editing.
+- Settings is exempt from runtime hotkey interception while frontmost, allowing existing shortcuts to be re-recorded.
+- Matched hotkeys consume both key-down and corresponding key-up.
+- Synthetic actions now use RuSwitcher 3.3.0's compatibility marker `0x52555300`, keeping BTT Lite injected shortcuts out of RuSwitcher's conversion buffer.
+- Synthetic modifier transitions are emitted as `flagsChanged`, matching native macOS modifier semantics.
+
+Retest:
+- In Trackpad view, + must immediately create/select a Trackpad rule.
+- For duplicated 3 Finger Swipe Up changed to Down, choose Send Keyboard Shortcut → Record Shortcut → press ⌘W.
+- With RuSwitcher 3.3.0 enabled, normal autocorrection and BTT Lite gestures should coexist without repeated a/ф runs or extra alert sounds.

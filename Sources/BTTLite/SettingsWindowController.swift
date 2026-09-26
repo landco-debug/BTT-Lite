@@ -25,6 +25,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let directionPopup = NSPopUpButton()
     private let systemKeyCodeField = NSTextField()
     private let systemKeyNameField = NSTextField()
+    private let triggerShortcutButton = NSButton(title: "Record Shortcut…", target: nil, action: nil)
 
     private let actionPopup = NSPopUpButton()
     private let actionKindPopup = NSPopUpButton()
@@ -35,8 +36,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let primaryScroll = NSScrollView()
     private let secondaryLabel = NSTextField(labelWithString: "")
     private let secondaryField = NSTextField()
+    private let actionShortcutButton = NSButton(title: "Record Shortcut…", target: nil, action: nil)
 
     private var visibleRules: [Rule] = []
+    private var shortcutMonitor: Any?
+    private enum ShortcutRecordTarget { case trigger, action }
+    private var shortcutRecordTarget: ShortcutRecordTarget?
     private var selectedRuleID: UUID?
     private var selectedActionID: UUID?
     private var isReloading = false
@@ -208,6 +213,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         addLabeledField("Display key", field: displayKeyField, y: &y, selector: #selector(ruleFieldChanged))
         addLabeledField("Modifiers", field: modifiersField, y: &y, selector: #selector(ruleFieldChanged))
         modifiersField.placeholderString = "Raw NSEvent modifier flags, e.g. 1048576"
+        triggerShortcutButton.target = self
+        triggerShortcutButton.action = #selector(recordTriggerShortcut)
+        triggerShortcutButton.toolTip = "Press the shortcut you want this keyboard trigger to recognize"
+        addLabeledControl("Shortcut", control: triggerShortcutButton, y: &y)
         addLabeledField("Fingers", field: fingersField, y: &y, selector: #selector(ruleFieldChanged))
         gesturePopup.addItems(withTitles: GestureKind.allCases.map(\.displayName))
         gesturePopup.target = self
@@ -287,6 +296,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             secondaryField.heightAnchor.constraint(equalToConstant: 24)
         ])
         y += 42
+
+        actionShortcutButton.target = self
+        actionShortcutButton.action = #selector(recordActionShortcut)
+        actionShortcutButton.toolTip = "Press the keyboard shortcut this action should send"
+        addLabeledControl("Shortcut", control: actionShortcutButton, y: &y)
 
         let note = NSTextField(wrappingLabelWithString: "Configuration is stored as a small JSON file in Application Support. The settings window is created only when opened; the background agent does not keep these editor controls alive unnecessarily.")
         note.textColor = .secondaryLabelColor
@@ -469,7 +483,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             keyCodeField.stringValue = String(k.keyCode)
             displayKeyField.stringValue = k.displayKey
             modifiersField.stringValue = String(k.modifiers.rawValue)
-            [keyCodeField, displayKeyField, modifiersField].forEach { $0.isHidden = false }
+            [keyCodeField, displayKeyField, modifiersField, triggerShortcutButton].forEach { $0.isHidden = false }
+            triggerShortcutButton.title = "Record…  " + shortcutDisplay(keyCode: k.keyCode, modifiers: k.modifiers, displayKey: k.displayKey)
         case let .gesture(g):
             triggerTypePopup.selectItem(at: g.device == .magicMouse ? 1 : 2)
             fingersField.stringValue = String(g.fingers)
@@ -500,18 +515,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     }
 
     private func hideAllTriggerFields() {
-        [keyCodeField, displayKeyField, modifiersField, fingersField, gesturePopup, directionPopup, systemKeyCodeField, systemKeyNameField].forEach { $0.isHidden = true }
+        [keyCodeField, displayKeyField, modifiersField, triggerShortcutButton, fingersField, gesturePopup, directionPopup, systemKeyCodeField, systemKeyNameField].forEach { $0.isHidden = true }
     }
 
     private func reloadActionEditor() {
         guard let action = selectedAction() else {
-            [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryLabel, secondaryField, secondaryLabel].forEach { $0.isEnabled = false }
+            [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryLabel, secondaryField, secondaryLabel, actionShortcutButton].forEach { $0.isEnabled = false }
+            actionShortcutButton.isHidden = true
             primaryText.isEditable = false
             primaryScroll.alphaValue = 0.5
             primaryText.string = ""
             return
         }
-        [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryLabel, secondaryField, secondaryLabel].forEach { $0.isEnabled = true }
+        [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryLabel, secondaryField, secondaryLabel, actionShortcutButton].forEach { $0.isEnabled = true }
         primaryText.isEditable = true
         primaryScroll.alphaValue = 1.0
         if let idx = ActionKind.allCases.firstIndex(of: action.kind) { actionKindPopup.selectItem(at: idx) }
@@ -527,6 +543,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         secondaryField.isHidden = fields.secondaryKey == nil
         primaryText.string = fields.primaryKey.flatMap { action.parameters[$0] } ?? ""
         secondaryField.stringValue = fields.secondaryKey.flatMap { action.parameters[$0] } ?? ""
+        actionShortcutButton.isHidden = action.kind != .sendShortcut
+        if action.kind == .sendShortcut {
+            let code = UInt16(action.parameters["keyCode"] ?? "")
+            let mods = ModifierSet(rawValue: UInt64(action.parameters["modifiers"] ?? "") ?? 0)
+            let display = action.parameters["displayKey"] ?? ""
+            if let code {
+                actionShortcutButton.title = "Record…  " + shortcutDisplay(keyCode: code, modifiers: mods, displayKey: display)
+            } else {
+                actionShortcutButton.title = "Record Shortcut…"
+            }
+        }
     }
 
     private func actionFields(for kind: ActionKind) -> (primaryKey: String?, primaryLabel: String?, secondaryKey: String?, secondaryLabel: String?) {
@@ -604,10 +631,37 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
 
     @objc private func addRule() {
         var profile = store.activeProfile() ?? Profile(name: "Default", rules: [])
+        let category = RuleCategory.allCases[categoryPopup.indexOfSelectedItem.clamped(to: 0...(RuleCategory.allCases.count - 1))]
+
+        let trigger: Trigger
+        var scope: RuleScope = .global
+        var name = "New Trigger"
+
+        switch category {
+        case .trackpad:
+            trigger = .gesture(GestureTrigger(device: .trackpad, fingers: 3, gesture: .swipe, direction: .down))
+            name = "New Trackpad Trigger"
+        case .magicMouse:
+            trigger = .gesture(GestureTrigger(device: .magicMouse, fingers: 3, gesture: .swipe, direction: .left))
+            name = "New Magic Mouse Trigger"
+        case .other:
+            trigger = .unsupported(description: "New Unsupported Trigger", rawType: nil)
+            name = "New Other Trigger"
+        case .applications:
+            trigger = .keyboard(KeyboardTrigger(keyCode: 0, displayKey: "A", modifiers: []))
+            let app = NSWorkspace.shared.frontmostApplication
+            scope = .application(name: app?.localizedName ?? "Application", bundleIdentifier: app?.bundleIdentifier ?? "")
+            name = "New Application Trigger"
+        case .all, .global, .keyboard:
+            trigger = .keyboard(KeyboardTrigger(keyCode: 0, displayKey: "A", modifiers: []))
+            name = "New Keyboard Trigger"
+        }
+
         let rule = Rule(
-            name: "New Trigger",
-            trigger: .keyboard(KeyboardTrigger(keyCode: 0, displayKey: "A", modifiers: [])),
-            actions: [RuleAction(kind: .sendShortcut, title: "Send Keyboard Shortcut", parameters: ["keyCode": "0", "modifiers": "0"])]
+            name: name,
+            scope: scope,
+            trigger: trigger,
+            actions: [RuleAction(kind: .sendShortcut, title: "Send Keyboard Shortcut", parameters: [:])]
         )
         profile.rules.append(rule)
         selectedRuleID = rule.id
@@ -722,6 +776,101 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         updateActionFieldsFromEditor()
     }
 
+    @objc private func recordTriggerShortcut() {
+        beginShortcutRecording(target: .trigger)
+    }
+
+    @objc private func recordActionShortcut() {
+        beginShortcutRecording(target: .action)
+    }
+
+    private func beginShortcutRecording(target: ShortcutRecordTarget) {
+        endShortcutRecording()
+        shortcutRecordTarget = target
+        let button = target == .trigger ? triggerShortcutButton : actionShortcutButton
+        button.title = "Press shortcut…  (Esc cancels)"
+        window?.makeKeyAndOrderFront(nil)
+
+        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.keyCode == 53 {
+                self.endShortcutRecording()
+                self.reloadEditor()
+                return nil
+            }
+
+            let modifiers = self.modifierSet(from: event.modifierFlags)
+            let displayKey = self.displayKey(for: event)
+            switch self.shortcutRecordTarget {
+            case .trigger:
+                self.updateSelectedRule { rule in
+                    rule.trigger = .keyboard(KeyboardTrigger(
+                        keyCode: UInt16(event.keyCode),
+                        displayKey: displayKey,
+                        modifiers: modifiers
+                    ))
+                }
+            case .action:
+                self.updateSelectedAction { action in
+                    action.kind = .sendShortcut
+                    action.title = "Send Keyboard Shortcut"
+                    action.parameters["keyCode"] = String(event.keyCode)
+                    action.parameters["modifiers"] = String(modifiers.rawValue)
+                    action.parameters["displayKey"] = displayKey
+                }
+            case .none:
+                break
+            }
+            self.endShortcutRecording()
+            self.reloadEditor()
+            return nil
+        }
+    }
+
+    private func endShortcutRecording() {
+        if let shortcutMonitor {
+            NSEvent.removeMonitor(shortcutMonitor)
+            self.shortcutMonitor = nil
+        }
+        shortcutRecordTarget = nil
+    }
+
+    private func modifierSet(from flags: NSEvent.ModifierFlags) -> ModifierSet {
+        let flags = flags.intersection(.deviceIndependentFlagsMask)
+        var result: ModifierSet = []
+        if flags.contains(.capsLock) { result.insert(.capsLock) }
+        if flags.contains(.shift) { result.insert(.shift) }
+        if flags.contains(.control) { result.insert(.control) }
+        if flags.contains(.option) { result.insert(.option) }
+        if flags.contains(.command) { result.insert(.command) }
+        if flags.contains(.function) { result.insert(.function) }
+        return result
+    }
+
+    private func displayKey(for event: NSEvent) -> String {
+        switch event.keyCode {
+        case 36: return "↩"
+        case 48: return "⇥"
+        case 49: return "Space"
+        case 51: return "⌫"
+        case 53: return "Esc"
+        case 123: return "←"
+        case 124: return "→"
+        case 125: return "↓"
+        case 126: return "↑"
+        default:
+            if let value = event.charactersIgnoringModifiers, !value.isEmpty {
+                return value.uppercased()
+            }
+            return "Key " + String(event.keyCode)
+        }
+    }
+
+    private func shortcutDisplay(keyCode: UInt16, modifiers: ModifierSet, displayKey: String) -> String {
+        let key = displayKey.isEmpty ? "Key " + String(keyCode) : displayKey
+        return modifiers.symbols + key
+    }
+
     func controlTextDidEndEditing(_ obj: Notification) {
         guard !isReloading else { return }
         if let field = obj.object as? NSTextField, field === primaryLabel || field === secondaryLabel { return }
@@ -736,6 +885,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     func textDidChange(_ notification: Notification) {
         guard !isReloading, notification.object as? NSTextView === primaryText else { return }
         updateActionFieldsFromEditor()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        endShortcutRecording()
     }
 
     private func updateActionFieldsFromEditor() {

@@ -10,6 +10,7 @@ final class KeyboardEngine {
     private let runner: ActionRunner
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var suppressedKeyUps: Set<UInt16> = []
 
     init(store: ConfigStore, runner: ActionRunner) {
         self.store = store
@@ -32,6 +33,7 @@ final class KeyboardEngine {
         }
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) |
+                   CGEventMask(1 << CGEventType.keyUp.rawValue) |
                    CGEventMask(1 << Self.systemDefinedEventType.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -72,11 +74,20 @@ final class KeyboardEngine {
         if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         runLoopSource = nil
         eventTap = nil
+        suppressedKeyUps.removeAll(keepingCapacity: true)
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Bool {
-        guard let profile = store.activeProfile() else { return false }
         let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if frontmostBundleID == Bundle.main.bundleIdentifier { return false }
+
+        if type == .keyUp {
+            let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+            if suppressedKeyUps.remove(keyCode) != nil { return true }
+            return false
+        }
+
+        guard let profile = store.activeProfile() else { return false }
 
         let matching: [Rule]
         if type == .keyDown {
@@ -101,8 +112,10 @@ final class KeyboardEngine {
 
         guard !matching.isEmpty else { return false }
         for rule in matching { runner.execute(rule) }
-        // A configured hotkey belongs to BTT Lite. Swallow the original event so
-        // apps do not also act on it (e.g. ⌘L focusing Chrome's address bar).
+        if type == .keyDown {
+            let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+            suppressedKeyUps.insert(keyCode)
+        }
         return true
     }
 
