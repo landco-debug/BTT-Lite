@@ -243,3 +243,43 @@ Retest:
 - In Trackpad view, + must immediately create/select a Trackpad rule.
 - For duplicated 3 Finger Swipe Up changed to Down, choose Send Keyboard Shortcut → Record Shortcut → press ⌘W.
 - With RuSwitcher 3.3.0 enabled, normal autocorrection and BTT Lite gestures should coexist without repeated a/ф runs or extra alert sounds.
+
+
+## C08 — Deterministic gesture arbitration and axis locking
+
+Status: implemented after confirmed on-device instability; macOS CI regression validation pending at commit time.
+
+User-reported failure:
+- 3-finger up/down and left/right were intermittently confused.
+- A 3-finger Space swipe could also open/close a browser page.
+- Some vertical swipes appeared to do nothing.
+- Occasionally both the native Space switch and a BTT Lite browser action happened in the same physical gesture.
+
+Root cause found in BTT Lite:
+- The C03/C06 recognizer started measuring from the very first touching finger and used the moving centroid. When fingers landed sequentially (1→2→3), adding the second/third finger could move the centroid by a large amount before the real swipe began. Because the user's profile also has 2-finger page-navigation swipes, a gesture intended as 3 fingers could transiently be recognized as a 2-finger left/right swipe.
+- C06 intentionally began firing as soon as a single frame crossed a weak 1.15 axis-dominance threshold. A slightly diagonal start could therefore commit to the wrong axis before the intended direction became clear.
+- The recognizer used max finger count and had no explicit arbitration for finger-count changes or axis locking.
+
+Relevant BetterTouchTool / Apple behavior used as design guidance:
+- BetterTouchTool's author states its three-finger swipe recognition requires exactly three touching fingers; BTT also uses minimum-touch-duration / post-click conflict guards for ambiguous touch states.
+- BTT continuous swipe recognition exposes “Movement Required To Begin” and an Automatic axis mode that locks to the first dominant axis rather than repeatedly reclassifying direction.
+- Apple's public gesture model is phase-based (begin/changed/end/cancel) and exposes a gesture axis; the implementation below mirrors those state-machine semantics even though BTT Lite reads global raw contacts through MultitouchSupport.
+
+Changes:
+- Added a 75 ms finger-membership settle window. Swipe tracking begins only after the same contact IDs/finger count have remained stable, so finger placement itself cannot become a swipe.
+- When the finger count increases, tracking rebases after it settles; when fingers begin lifting, lower-finger swipe recognition is suppressed until all contacts leave the surface. This closes 3→2, 4→3, etc. tail-trigger bugs.
+- Direction now requires a dominant-axis candidate for three consecutive frames, then locks for the remainder of that touch session.
+- Final triggering requires stronger 1.60 axis dominance. Ambiguous diagonal motion produces no destructive action rather than guessing.
+- Once an axis is locked it cannot flip from horizontal to vertical (or vice versa) within the same gesture.
+- Trackpad and Magic Mouse have separate movement distances; Magic Mouse keeps the lower threshold needed for its smaller surface.
+- Maximum deliberate swipe time increased to 1.75 s so slower gestures do not appear to “hang”.
+- Click correlation now also requires the observed finger count to have been stable for 55 ms before a multi-finger click can fire.
+- The same arbitration logic applies to every swipe/finger count on both Trackpad and Magic Mouse, not only the reported 3-finger cases.
+
+Regression coverage:
+- Added CI tests for sequential 1→2→3 landing, all four cardinal directions, diagonal rejection, axis lock/no mid-gesture flip, 3→2 tail suppression, slow swipes and 3-finger double-tap with sequential finger landing.
+- CI now runs those pure-Swift recognizer tests before building the application.
+
+Retest focus:
+- Keep macOS native 3-finger left/right Space switching enabled and BTT Lite vertical 3-finger actions enabled.
+- Repeatedly perform left/right, up/down and deliberately diagonal 3-finger movements. Wrong-axis actions and 2-finger page-navigation leakage should be gone; intentionally diagonal gestures may be ignored by design.

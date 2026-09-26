@@ -7,6 +7,7 @@ private final class GestureProcessingState {
         var device: GestureDevice
         var fingerCount: Int
         var uptime: TimeInterval
+        var fingerCountSince: TimeInterval
     }
 
     private let lock = NSLock()
@@ -23,7 +24,16 @@ private final class GestureProcessingState {
     func process(device: MultitouchBridge.Device, contacts: [RawTouchContact], uptime: TimeInterval) -> [RecognizedGesture] {
         lock.lock()
         defer { lock.unlock() }
-        liveStates[device.id] = Snapshot(device: device.kind, fingerCount: contacts.count, uptime: uptime)
+        let prior = liveStates[device.id]
+        let countSince = prior?.fingerCount == contacts.count
+            ? (prior?.fingerCountSince ?? uptime)
+            : uptime
+        liveStates[device.id] = Snapshot(
+            device: device.kind,
+            fingerCount: contacts.count,
+            uptime: uptime,
+            fingerCountSince: countSince
+        )
         return recognizer.processFrame(
             deviceID: device.id,
             device: device.kind,
@@ -32,11 +42,19 @@ private final class GestureProcessingState {
         )
     }
 
-    func mostRecentActive(maxAge: TimeInterval, now: TimeInterval) -> Snapshot? {
+    func mostRecentActive(
+        maxAge: TimeInterval,
+        minimumStableDuration: TimeInterval,
+        now: TimeInterval
+    ) -> Snapshot? {
         lock.lock()
         defer { lock.unlock() }
         return liveStates.values
-            .filter { $0.fingerCount > 0 && now - $0.uptime <= maxAge }
+            .filter {
+                $0.fingerCount > 0 &&
+                now - $0.uptime <= maxAge &&
+                now - $0.fingerCountSince >= minimumStableDuration
+            }
             .max { $0.uptime < $1.uptime }
     }
 }
@@ -148,6 +166,7 @@ final class GestureEngine {
         guard type == .leftMouseDown else { return false }
         guard let live = processor.mostRecentActive(
             maxAge: 0.20,
+            minimumStableDuration: 0.055,
             now: ProcessInfo.processInfo.systemUptime
         ), live.fingerCount > 0 else { return false }
 

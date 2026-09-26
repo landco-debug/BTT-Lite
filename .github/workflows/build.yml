@@ -15,6 +15,15 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+      - name: Gesture recognizer regression tests
+        run: |
+          set -euo pipefail
+          /usr/bin/xcrun swiftc \
+            Sources/BTTLite/Models.swift \
+            Sources/BTTLite/GestureRecognizerCore.swift \
+            Tests/GestureRecognizerRegression.swift \
+            -o /tmp/btt-gesture-regression
+          /tmp/btt-gesture-regression
       - name: Build application
         run: ./scripts/build-app.sh
       - name: Smoke test packaged app

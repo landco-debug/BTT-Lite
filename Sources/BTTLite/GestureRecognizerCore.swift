@@ -15,14 +15,38 @@ struct RecognizedGesture: Equatable {
 }
 
 /// Stateful, allocation-light recognizer for the gesture vocabulary BTT Lite exposes.
-/// It is intentionally independent of AppKit/private APIs so it can be unit tested.
+///
+/// Important invariants:
+/// - finger placement is not movement: contact membership must settle before swipe tracking starts;
+/// - an axis/direction is locked only after several confident frames;
+/// - once locked, the gesture never changes axis during the same touch session;
+/// - after a finger is lifted, no lower-finger swipe can start until every finger is off the surface;
+/// - a touch session emits at most one swipe.
+///
+/// These rules intentionally prefer "no action" over the wrong destructive action.
 final class GestureRecognizerCore {
     struct Thresholds {
-        var swipeDistance: Double = 0.070
-        var swipeDominance: Double = 1.15
-        var maximumSwipeDuration: TimeInterval = 1.20
-        var tapMovement: Double = 0.060
-        var maximumTapDuration: TimeInterval = 0.40
+        /// Normalized surface distance required before a Trackpad swipe fires.
+        var swipeDistance: Double = 0.078
+        /// Magic Mouse has a much smaller usable touch surface.
+        var magicMouseSwipeDistance: Double = 0.060
+        /// Movement needed before we even consider locking a direction.
+        var axisLockDistance: Double = 0.036
+        var magicMouseAxisLockDistance: Double = 0.028
+        /// Dominant axis must beat the other axis by this factor to become a candidate.
+        var axisLockDominance: Double = 1.45
+        /// The same direction must remain dominant for multiple frames before it is locked.
+        var axisConfirmationFrames: Int = 3
+        /// Final trigger requires stronger confidence than the initial axis lock.
+        var swipeTriggerDominance: Double = 1.60
+        /// Give the intended number of fingers time to land before measuring motion.
+        var fingerSettleDuration: TimeInterval = 0.075
+        /// Avoid treating contact-placement jitter as an ultra-fast swipe.
+        var minimumSwipeDuration: TimeInterval = 0.035
+        /// Deliberate slow swipes should still work.
+        var maximumSwipeDuration: TimeInterval = 1.75
+        var tapMovement: Double = 0.045
+        var maximumTapDuration: TimeInterval = 0.45
         var doubleTapInterval: TimeInterval = 0.55
     }
 
@@ -33,14 +57,29 @@ final class GestureRecognizerCore {
 
     private struct DeviceState {
         var active = false
-        var startUptime: TimeInterval = 0
+        var sessionStartUptime: TimeInterval = 0
+
+        var contactIDs: [Int] = []
+        var currentFingerCount = 0
+        var peakFingerCount = 0
+        var lastMembershipChangeUptime: TimeInterval = 0
+
+        var trackingReady = false
+        var stableFingerCount = 0
+        var trackingStartUptime: TimeInterval = 0
         var startX: Double = 0
         var startY: Double = 0
         var lastX: Double = 0
         var lastY: Double = 0
-        var maxFingerCount = 0
         var maxDistance: Double = 0
+
+        var candidateDirection: GestureDirection?
+        var candidateFrames = 0
+        var lockedDirection: GestureDirection?
+
         var didEmitSwipe = false
+        var swipeSuppressedUntilLift = false
+        var tapEligible = true
         var lastTap: TapMemory?
     }
 
@@ -60,105 +99,245 @@ final class GestureRecognizerCore {
         var state = states[deviceID] ?? DeviceState()
         defer { states[deviceID] = state }
 
-        guard !contacts.isEmpty else {
-            guard state.active else { return [] }
-            let duration = max(0, uptime - state.startUptime)
-            let dx = state.lastX - state.startX
-            let dy = state.lastY - state.startY
-            let absX = abs(dx)
-            let absY = abs(dy)
-            let fingers = max(1, state.maxFingerCount)
-
-            state.active = false
-            state.maxFingerCount = 0
-            state.maxDistance = 0
-
-            if state.didEmitSwipe {
-                state.didEmitSwipe = false
-                return []
-            }
-            state.didEmitSwipe = false
-
-            if duration <= thresholds.maximumSwipeDuration,
-               max(absX, absY) >= thresholds.swipeDistance {
-                let direction: GestureDirection?
-                if absX >= absY * thresholds.swipeDominance {
-                    direction = dx < 0 ? .left : .right
-                } else if absY >= absX * thresholds.swipeDominance {
-                    // MultitouchSupport's normalized Y grows away from the user.
-                    direction = dy < 0 ? .down : .up
-                } else {
-                    direction = nil
-                }
-                if let direction {
-                    state.lastTap = nil
-                    return [RecognizedGesture(device: device, fingers: fingers, kind: .swipe, direction: direction)]
-                }
-            }
-
-            if duration <= thresholds.maximumTapDuration,
-               state.maxDistance <= thresholds.tapMovement {
-                if let previous = state.lastTap,
-                   previous.fingers == fingers,
-                   uptime - previous.uptime <= thresholds.doubleTapInterval {
-                    state.lastTap = nil
-                    return [RecognizedGesture(device: device, fingers: fingers, kind: .doubleTap, direction: nil)]
-                }
-                state.lastTap = TapMemory(uptime: uptime, fingers: fingers)
-            } else {
-                state.lastTap = nil
-            }
-            return []
+        if contacts.isEmpty {
+            return finishSession(device: device, uptime: uptime, state: &state)
         }
 
         let centroid = Self.centroid(contacts)
+        let ids = contacts.map(\.id).sorted()
+
         if !state.active {
             state.active = true
-            state.startUptime = uptime
+            state.sessionStartUptime = uptime
+            state.contactIDs = ids
+            state.currentFingerCount = contacts.count
+            state.peakFingerCount = contacts.count
+            state.lastMembershipChangeUptime = uptime
+            state.trackingReady = false
+            state.stableFingerCount = 0
             state.startX = centroid.x
             state.startY = centroid.y
             state.lastX = centroid.x
             state.lastY = centroid.y
-            state.maxFingerCount = contacts.count
             state.maxDistance = 0
+            state.candidateDirection = nil
+            state.candidateFrames = 0
+            state.lockedDirection = nil
             state.didEmitSwipe = false
+            state.swipeSuppressedUntilLift = false
+            state.tapEligible = true
+            return []
+        }
+
+        let membershipChanged = ids != state.contactIDs
+        if membershipChanged {
+            let countDecreased = contacts.count < state.currentFingerCount
+            let sameCountReplacement = contacts.count == state.currentFingerCount
+
+            // Once fingers start lifting, never reinterpret the tail of an N-finger
+            // gesture as an (N-1)-finger gesture. This is especially important when
+            // 2F page navigation and 3F Space navigation coexist.
+            if countDecreased {
+                state.swipeSuppressedUntilLift = true
+            }
+            // Replacing one contact with another while keeping the same count is not a
+            // clean tap/swipe; conservatively cancel the session's recognizers.
+            if sameCountReplacement {
+                state.swipeSuppressedUntilLift = true
+                state.tapEligible = false
+            }
+
+            state.contactIDs = ids
+            state.currentFingerCount = contacts.count
+            state.peakFingerCount = max(state.peakFingerCount, contacts.count)
+            state.lastMembershipChangeUptime = uptime
+            state.trackingReady = false
+            state.stableFingerCount = 0
+            state.startX = centroid.x
+            state.startY = centroid.y
+            state.lastX = centroid.x
+            state.lastY = centroid.y
+            state.candidateDirection = nil
+            state.candidateFrames = 0
+            state.lockedDirection = nil
             return []
         }
 
         state.lastX = centroid.x
         state.lastY = centroid.y
-        state.maxFingerCount = max(state.maxFingerCount, contacts.count)
+
+        if !state.trackingReady {
+            guard uptime - state.lastMembershipChangeUptime >= thresholds.fingerSettleDuration else {
+                return []
+            }
+
+            // Start measuring only after contact membership has settled. The centroid
+            // can jump dramatically while the second/third/fourth finger lands.
+            state.trackingReady = true
+            state.stableFingerCount = contacts.count
+            state.trackingStartUptime = uptime
+            state.startX = centroid.x
+            state.startY = centroid.y
+            state.maxDistance = 0
+            state.candidateDirection = nil
+            state.candidateFrames = 0
+            state.lockedDirection = nil
+            return []
+        }
+
         let dx = centroid.x - state.startX
         let dy = centroid.y - state.startY
-        state.maxDistance = max(state.maxDistance, hypot(dx, dy))
+        let distance = hypot(dx, dy)
+        state.maxDistance = max(state.maxDistance, distance)
+        if state.maxDistance > thresholds.tapMovement {
+            state.tapEligible = false
+        }
 
-        // Emit a swipe as soon as it is unambiguous instead of waiting for every
-        // finger to leave the surface. Magic Mouse can keep a lingering contact
-        // alive after the visible swipe, which previously made the action appear dead.
-        let duration = max(0, uptime - state.startUptime)
-        if !state.didEmitSwipe,
-           duration <= thresholds.maximumSwipeDuration,
-           max(abs(dx), abs(dy)) >= thresholds.swipeDistance {
-            let direction: GestureDirection?
-            if abs(dx) >= abs(dy) * thresholds.swipeDominance {
-                direction = dx < 0 ? .left : .right
-            } else if abs(dy) >= abs(dx) * thresholds.swipeDominance {
-                direction = dy < 0 ? .down : .up
+        guard !state.didEmitSwipe,
+              !state.swipeSuppressedUntilLift else {
+            return []
+        }
+
+        let duration = max(0, uptime - state.trackingStartUptime)
+        guard duration <= thresholds.maximumSwipeDuration else { return [] }
+
+        let lockDistance = device == .magicMouse
+            ? thresholds.magicMouseAxisLockDistance
+            : thresholds.axisLockDistance
+        let triggerDistance = device == .magicMouse
+            ? thresholds.magicMouseSwipeDistance
+            : thresholds.swipeDistance
+
+        if state.lockedDirection == nil {
+            if let candidate = Self.dominantDirection(
+                dx: dx,
+                dy: dy,
+                minimumDistance: lockDistance,
+                dominance: thresholds.axisLockDominance
+            ) {
+                if candidate == state.candidateDirection {
+                    state.candidateFrames += 1
+                } else {
+                    state.candidateDirection = candidate
+                    state.candidateFrames = 1
+                }
+
+                if state.candidateFrames >= max(1, thresholds.axisConfirmationFrames) {
+                    state.lockedDirection = candidate
+                }
             } else {
-                direction = nil
-            }
-            if let direction {
-                state.didEmitSwipe = true
-                state.lastTap = nil
-                return [RecognizedGesture(
-                    device: device,
-                    fingers: max(1, state.maxFingerCount),
-                    kind: .swipe,
-                    direction: direction
-                )]
+                // Ambiguous/diagonal motion must build confidence again; it cannot
+                // inherit a stale candidate from a previous few frames.
+                state.candidateDirection = nil
+                state.candidateFrames = 0
             }
         }
+
+        guard duration >= thresholds.minimumSwipeDuration,
+              let locked = state.lockedDirection else {
+            return []
+        }
+
+        let components = Self.components(for: locked, dx: dx, dy: dy)
+        guard components.primary > 0,
+              components.primary >= triggerDistance,
+              components.primary >= components.orthogonal * thresholds.swipeTriggerDominance else {
+            return []
+        }
+
+        state.didEmitSwipe = true
+        state.lastTap = nil
+        return [RecognizedGesture(
+            device: device,
+            fingers: max(1, state.stableFingerCount),
+            kind: .swipe,
+            direction: locked
+        )]
+    }
+
+    private func finishSession(
+        device: GestureDevice,
+        uptime: TimeInterval,
+        state: inout DeviceState
+    ) -> [RecognizedGesture] {
+        guard state.active else { return [] }
+
+        let duration = max(0, uptime - state.sessionStartUptime)
+        let fingers = max(1, state.peakFingerCount)
+        let emittedSwipe = state.didEmitSwipe
+        let canBeTap = state.tapEligible &&
+            !emittedSwipe &&
+            duration <= thresholds.maximumTapDuration &&
+            state.maxDistance <= thresholds.tapMovement
+
+        state.active = false
+        state.contactIDs = []
+        state.currentFingerCount = 0
+        state.peakFingerCount = 0
+        state.trackingReady = false
+        state.stableFingerCount = 0
+        state.maxDistance = 0
+        state.candidateDirection = nil
+        state.candidateFrames = 0
+        state.lockedDirection = nil
+        state.didEmitSwipe = false
+        state.swipeSuppressedUntilLift = false
+        state.tapEligible = true
+
+        if emittedSwipe {
+            state.lastTap = nil
+            return []
+        }
+
+        if canBeTap {
+            if let previous = state.lastTap,
+               previous.fingers == fingers,
+               uptime - previous.uptime <= thresholds.doubleTapInterval {
+                state.lastTap = nil
+                return [RecognizedGesture(device: device, fingers: fingers, kind: .doubleTap, direction: nil)]
+            }
+            state.lastTap = TapMemory(uptime: uptime, fingers: fingers)
+        } else {
+            state.lastTap = nil
+        }
         return []
+    }
+
+    private static func dominantDirection(
+        dx: Double,
+        dy: Double,
+        minimumDistance: Double,
+        dominance: Double
+    ) -> GestureDirection? {
+        let absX = abs(dx)
+        let absY = abs(dy)
+        guard max(absX, absY) >= minimumDistance else { return nil }
+
+        if absX >= absY * dominance {
+            return dx < 0 ? .left : .right
+        }
+        if absY >= absX * dominance {
+            // MultitouchSupport's normalized Y grows away from the user.
+            return dy < 0 ? .down : .up
+        }
+        return nil
+    }
+
+    private static func components(
+        for direction: GestureDirection,
+        dx: Double,
+        dy: Double
+    ) -> (primary: Double, orthogonal: Double) {
+        switch direction {
+        case .left:
+            return (-dx, abs(dy))
+        case .right:
+            return (dx, abs(dy))
+        case .up:
+            return (dy, abs(dx))
+        case .down:
+            return (-dy, abs(dx))
+        }
     }
 
     private static func centroid(_ contacts: [RawTouchContact]) -> (x: Double, y: Double) {
