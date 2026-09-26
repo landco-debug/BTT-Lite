@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let bttLiteConfigDidChange = Notification.Name("BTTLiteConfigDidChange")
+}
+
 @MainActor
 final class ConfigStore {
     static let shared = ConfigStore()
@@ -33,6 +37,7 @@ final class ConfigStore {
         let data = try encoder.encode(configuration)
         try data.write(to: fileURL, options: [.atomic])
         onChange?()
+        NotificationCenter.default.post(name: .bttLiteConfigDidChange, object: self)
     }
 
     func replace(with newConfiguration: AppConfiguration) throws {

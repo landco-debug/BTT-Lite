@@ -5,9 +5,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var settingsWindowController: SettingsWindowController?
     private let store = ConfigStore.shared
+    private lazy var actionRunner = ActionRunner()
+    private lazy var keyboardEngine = KeyboardEngine(store: store, runner: actionRunner)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
+        keyboardEngine.start(promptForPermission: true)
+        NotificationCenter.default.addObserver(forName: .bttLiteConfigDidChange, object: store, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.keyboardEngine.start(promptForPermission: false) }
+        }
     }
 
     private func configureStatusItem() {

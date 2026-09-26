@@ -188,8 +188,9 @@ struct BTTImporter {
     }
 
     private func isEnabled(_ raw: [String: Any]) -> Bool {
-        guard let value = raw["BTTEnabled2"] else { return true }
-        return boolValue(value, default: true)
+        if let value = raw["BTTEnabled2"] { return boolValue(value, default: true) }
+        if let value = raw["BTTEnabled"] { return boolValue(value, default: true) }
+        return true
     }
 
     private func boolValue(_ value: Any?, default fallback: Bool) -> Bool {

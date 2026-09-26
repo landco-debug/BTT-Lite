@@ -21,19 +21,16 @@ Action families present in the reference preset include: send shortcut, run Appl
 
 ## C00 — Repository bootstrap and project charter
 
-Status: created on GitHub as the root commit before importing the staged local history.
+Status: complete.
 
 Changes:
 - Created the public `landco-debug/BTT-Lite` repository requested for this project.
 - Added this hand-off file first so every later functional commit has an authoritative project log from the beginning.
 - No runtime or UI code exists in C00.
 
-Next planned commit:
-- C01: configurable native AppKit editor and BetterTouchTool preset importer.
-
 ## C01 — Bootstrap configurable AppKit editor and BTT importer
 
-Status: implemented locally; macOS build must be verified by CI after the GitHub repository exists.
+Status: implemented; macOS build verification is delegated to GitHub Actions.
 
 Changes:
 - Added Swift Package executable targeting macOS 15+.
@@ -50,5 +47,23 @@ Validation performed:
 - `Models.swift` + `BTTImporter.swift` type-check under Swift 6.2.
 - Import test against the supplied `Default.bttpreset` returns exactly 32 rules: Keyboard 19, Magic Mouse 7, Trackpad 6.
 
+## C02 — Keyboard runtime and lightweight native action execution
+
+Status: implemented; macOS compile/runtime verification is delegated to GitHub Actions.
+
+Changes:
+- Added global keyboard event tap using CoreGraphics/Accessibility. It matches the active profile, exact key code/modifier set and application scope.
+- Synthetic key events are tagged and ignored by the event tap to avoid recursive trigger loops.
+- Added sequential `ActionRunner` for common native actions: send shortcut, run Apple Shortcut, launch path, open URL, terminal command, shell script, AppleScript, clipboard wait, Space switching, page back/forward fallback, Launchpad and hovered-Dock activation.
+- Bluetooth toggle is isolated into a short-lived helper executable linked against `IOBluetooth`; this prevents the always-on agent from loading the Bluetooth framework just to sit idle.
+- Configuration changes restart only the lightweight keyboard event tap; no polling loop is used.
+- Fixed BetterTouchTool import of `BTTEnabled` in addition to `BTTEnabled2`. The reference preset imports as 32 rules total, 29 enabled; 41 actions total, 36 enabled.
+- JavaScript transform and clipboard-history actions remain preserved in the configuration but are explicitly not yet executed; JavaScript is intentionally deferred to an on-demand helper so JavaScriptCore/network support does not increase idle RSS.
+
+Validation performed:
+- All main-target Swift source still passes `swiftc -parse` under Swift 6.2.
+- Pure model/importer type-check passes.
+- Reference preset test: `rules=32 enabled=29`, `actions=41 enabledActions=36`.
+
 Next planned commit:
-- C02: low-overhead keyboard/system-key event engine and native action executor; keep gesture engine separate.
+- C03: low-overhead raw multitouch engine for both Magic Mouse and trackpad. Prefer an in-project runtime-loaded `MultitouchSupport.framework` bridge (no third-party runtime package) so all attached surfaces can be enumerated and classified independently.

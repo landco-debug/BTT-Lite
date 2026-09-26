@@ -11,11 +11,12 @@ DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 
 rm -rf "$DIST"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 
 swift build -c release --arch arm64
 BIN_DIR="$(swift build -c release --arch arm64 --show-bin-path)"
 cp "$BIN_DIR/$PRODUCT" "$APP/Contents/MacOS/$PRODUCT"
+cp "$BIN_DIR/BTTLiteBluetoothHelper" "$APP/Contents/Helpers/BTTLiteBluetoothHelper"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
