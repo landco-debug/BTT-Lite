@@ -67,3 +67,17 @@ Validation performed:
 
 Next planned commit:
 - C03: low-overhead raw multitouch engine for both Magic Mouse and trackpad. Prefer an in-project runtime-loaded `MultitouchSupport.framework` bridge (no third-party runtime package) so all attached surfaces can be enumerated and classified independently.
+
+
+## C02.1 — CI toolchain compatibility
+
+Status: applied after the first GitHub Actions build exposed a toolchain mismatch.
+
+Changes:
+- Lowered only the Swift Package manifest tools declaration from 6.2 to 6.1.
+- No runtime behavior or source-language target changed; the GitHub macOS 15 arm64 runner currently provides Xcode 16.4 / Swift 6.1.2.
+- This keeps CI reproducible on the actual Sequoia runner instead of requiring an unnecessary newer toolchain.
+
+Validation:
+- C01 GitHub Actions failed before compilation solely because a 6.2 package manifest was rejected by SwiftPM 6.1.
+- A new arm64 CI build is triggered by this commit.
