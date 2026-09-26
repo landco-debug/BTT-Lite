@@ -494,11 +494,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
 
     private func reloadActionEditor() {
         guard let action = selectedAction() else {
-            [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryScroll, primaryLabel, secondaryField, secondaryLabel].forEach { $0.isEnabled = false }
+            [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryLabel, secondaryField, secondaryLabel].forEach { $0.isEnabled = false }
+            primaryText.isEditable = false
+            primaryScroll.alphaValue = 0.5
             primaryText.string = ""
             return
         }
-        [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryScroll, primaryLabel, secondaryField, secondaryLabel].forEach { $0.isEnabled = true }
+        [actionPopup, actionKindPopup, actionTitleField, actionEnabledCheck, primaryLabel, secondaryField, secondaryLabel].forEach { $0.isEnabled = true }
+        primaryText.isEditable = true
+        primaryScroll.alphaValue = 1.0
         if let idx = ActionKind.allCases.firstIndex(of: action.kind) { actionKindPopup.selectItem(at: idx) }
         actionTitleField.stringValue = action.title
         actionEnabledCheck.state = action.enabled ? .on : .off

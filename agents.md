@@ -81,3 +81,18 @@ Changes:
 Validation:
 - C01 GitHub Actions failed before compilation solely because a 6.2 package manifest was rejected by SwiftPM 6.1.
 - A new arm64 CI build is triggered by this commit.
+
+
+## C02.2 — First macOS compiler fixes
+
+Status: applied from GitHub Actions diagnostics.
+
+Changes:
+- Enter the AppKit application from a `MainActor.assumeIsolated` top-level block so the main-actor `AppDelegate` is initialized legally under Swift 6 concurrency checking.
+- Removed the actor-isolated `stop()` call from `KeyboardEngine.deinit`; the engine is application-lifetime and is explicitly restarted/stopped by its owner.
+- Replaced the nonexistent CoreGraphics enum case `CGEventType.systemDefined` with the documented raw event type 14 used by AppKit system-defined media/function-key events.
+- Fixed mixed `NSView` action-editor arrays that attempted to use `isEnabled` on `NSScrollView`; controls and text-editability are now toggled separately.
+
+Validation:
+- These changes address every source compile error reported by the C02.1 macOS 15 arm64 workflow.
+- A new CI run is triggered by this commit.

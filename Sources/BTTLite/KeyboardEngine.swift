@@ -4,6 +4,8 @@ import Foundation
 
 @MainActor
 final class KeyboardEngine {
+    private static let systemDefinedEventType = CGEventType(rawValue: 14)!
+
     private let store: ConfigStore
     private let runner: ActionRunner
     private var eventTap: CFMachPort?
@@ -14,7 +16,6 @@ final class KeyboardEngine {
         self.runner = runner
     }
 
-    deinit { stop() }
 
     func start(promptForPermission: Bool) {
         stop()
@@ -31,7 +32,7 @@ final class KeyboardEngine {
         }
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) |
-                   CGEventMask(1 << CGEventType.systemDefined.rawValue)
+                   CGEventMask(1 << Self.systemDefinedEventType.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo else { return Unmanaged.passUnretained(event) }
@@ -78,8 +79,7 @@ final class KeyboardEngine {
         let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 
         let matching: [Rule]
-        switch type {
-        case .keyDown:
+        if type == .keyDown {
             let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
             let modifiers = ModifierSet(rawValue: UInt64(event.flags.rawValue)).intersection(.userRelevant)
             matching = profile.rules.filter { rule in
@@ -87,7 +87,7 @@ final class KeyboardEngine {
                 guard case let .keyboard(trigger) = rule.trigger else { return false }
                 return trigger.keyCode == keyCode && trigger.modifiers == modifiers && trigger.triggerOnKeyDown
             }
-        case .systemDefined:
+        } else if type == Self.systemDefinedEventType {
             guard let nsEvent = NSEvent(cgEvent: event) else { return }
             let systemCode = Int((nsEvent.data1 & 0xFFFF0000) >> 16)
             matching = profile.rules.filter { rule in
@@ -95,7 +95,7 @@ final class KeyboardEngine {
                 guard case let .systemKey(trigger) = rule.trigger else { return false }
                 return trigger.code == systemCode
             }
-        default:
+        } else {
             return
         }
 
