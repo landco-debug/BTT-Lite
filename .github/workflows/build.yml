@@ -31,8 +31,10 @@ jobs:
           set -euo pipefail
           APP="dist/BTT Lite.app"
           test -x "$APP/Contents/MacOS/BTTLite"
-          test -x "$APP/Contents/Helpers/BTTLiteBluetoothHelper"
+          test -x "$APP/Contents/Helpers/BTTLiteBluetoothHelper.app/Contents/MacOS/BTTLiteBluetoothHelper"
           test -x "$APP/Contents/Helpers/BTTLiteJavaScriptHelper"
+          /usr/bin/codesign --verify --strict "$APP/Contents/Helpers/BTTLiteBluetoothHelper.app"
+          /usr/libexec/PlistBuddy -c "Print :NSBluetoothAlwaysUsageDescription" "$APP/Contents/Helpers/BTTLiteBluetoothHelper.app/Contents/Info.plist" | /usr/bin/grep -q "Bluetooth"
           /usr/bin/codesign --verify --deep --strict "$APP"
           /usr/bin/file "$APP/Contents/MacOS/BTTLite" | /usr/bin/grep -q "arm64"
           /usr/libexec/PlistBuddy -c "Print :NSBluetoothAlwaysUsageDescription" "$APP/Contents/Info.plist" | /usr/bin/grep -q "Bluetooth"

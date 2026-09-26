@@ -79,7 +79,7 @@ final class ActionRunner {
             let address = action.parameters["address"] ?? ""
             let name = action.parameters["deviceName"] ?? ""
             if !address.isEmpty || !name.isEmpty {
-                await runBundledHelper("BTTLiteBluetoothHelper", arguments: [address, name])
+                await toggleBluetoothDevice(address: address, name: name)
             }
         case .activateHoveredDockApp:
             activateHoveredDockApp()
@@ -289,19 +289,84 @@ final class ActionRunner {
         }
     }
 
-    private func runBundledHelper(_ name: String, arguments: [String]) async {
-        let url = Bundle.main.bundleURL
+    private struct ProcessResult {
+        var status: Int32
+        var output: String
+        var error: String
+    }
+
+    private func bundledHelperURL(_ name: String) -> URL {
+        let helpers = Bundle.main.bundleURL
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Helpers", isDirectory: true)
-            .appendingPathComponent(name)
-        await runProcess(url.path, arguments: arguments)
+
+        if name == "BTTLiteBluetoothHelper" {
+            return helpers
+                .appendingPathComponent("BTTLiteBluetoothHelper.app", isDirectory: true)
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("MacOS", isDirectory: true)
+                .appendingPathComponent(name)
+        }
+        return helpers.appendingPathComponent(name)
+    }
+
+    private func toggleBluetoothDevice(address: String, name: String) async {
+        let result = await runProcessResult(
+            bundledHelperURL("BTTLiteBluetoothHelper").path,
+            arguments: [address, name]
+        )
+        guard result.status != 0 else { return }
+
+        let detail = !result.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? result.error.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "Bluetooth helper exited with status \(result.status)."
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Bluetooth action failed"
+        alert.informativeText = detail
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func runProcessResult(_ executable: String, arguments: [String]) async -> ProcessResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = arguments
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+
+                do {
+                    try process.run()
+                    let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                    let error = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    continuation.resume(returning: ProcessResult(
+                        status: process.terminationStatus,
+                        output: String(data: output, encoding: .utf8) ?? "",
+                        error: String(data: error, encoding: .utf8) ?? ""
+                    ))
+                } catch {
+                    continuation.resume(returning: ProcessResult(
+                        status: -1,
+                        output: "",
+                        error: String(describing: error)
+                    ))
+                }
+            }
+        }
+    }
+
+    private func runBundledHelper(_ name: String, arguments: [String]) async {
+        await runProcess(bundledHelperURL(name).path, arguments: arguments)
     }
 
     private func runBundledHelperCapture(_ name: String, stdin: Data) async -> Data? {
-        let url = Bundle.main.bundleURL
-            .appendingPathComponent("Contents", isDirectory: true)
-            .appendingPathComponent("Helpers", isDirectory: true)
-            .appendingPathComponent(name)
+        let url = bundledHelperURL(name)
         return await runProcessCapture(url.path, arguments: [], stdin: stdin)
     }
 

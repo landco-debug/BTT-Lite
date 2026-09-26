@@ -319,3 +319,38 @@ Retest:
 - Close a standalone browser/web app with the configured ⌘W swipe, then restore it with the ⇧⌘T swipe.
 - Test the same close/restore pair in an ordinary browser tab/window.
 - Press Fn+4 with Bluetooth already enabled; allow the Bluetooth permission prompt if macOS shows it, then verify disconnect and reconnect on consecutive presses.
+
+
+## C10 — Physical Fn chord interception and bundled Bluetooth helper
+
+Status: implemented after C09 on-device retest proved the Fn+4 trigger still never fired; macOS CI validation pending at commit time.
+
+New on-device evidence:
+- Pressing Fn+4 selected a Finder item / typed the character “4” into text fields.
+- No Bluetooth privacy prompt appeared.
+- This proves the failure occurs before the Bluetooth action: BTT Lite was not recognizing and consuming the Fn+4 chord, so the Bluetooth helper was never launched.
+- Screenshots from BetterTouchTool 6.017 confirm the intended action is “Toggle Bluetooth Device Connection”; its configuration UI resolves the currently paired device as “Lenovo”, while the action tile/preset retains the older display name “Win”. The saved hardware address is therefore the authoritative identity; BTT Lite already prefers the address over the stale name.
+
+Exact preset trigger:
+- Fn+4 is a keyboard trigger with keyCode 21 and modifier value 8388608 (Fn / kCGEventFlagMaskSecondaryFn).
+- The unrelated Imgur Shortcut action on that rule is disabled; the Bluetooth toggle action is enabled.
+
+Root cause:
+- C09 tried to infer Fn by OR-ing the flags of the keyDown event and event-source modifier tables. On Apple laptop keyboards the physical Fn/Globe key is special: the reliable physical transition is a flagsChanged event for kVK_Function (virtual key code 63), and the number-key keyDown can still arrive without the Fn bit. The observed literal “4” is exactly the failure mode of that approach.
+- The keyboard tap was installed at the session level. Fn/Globe is a hardware modifier, so C10 first installs a HID-level event tap and falls back to the session level only if necessary.
+- C09 added the Bluetooth privacy key only to the outer app while executing the Bluetooth code from a bare child Mach-O. C10 packages the Bluetooth helper as its own nested app bundle with its own Bluetooth purpose string, giving macOS TCC an unambiguous responsible bundle when IOBluetooth is first used.
+
+Changes:
+- KeyboardEngine now tracks physical Fn/Globe state explicitly from flagsChanged keyCode 63, with HID hardware key-state fallback via CGEventSource.keyState(.hidSystemState, key: 63).
+- Fn state is merged into a normal number-key event before exact trigger matching. A matched Fn+4 now consumes both the “4” key-down and key-up, so Finder/text fields cannot receive the literal digit.
+- Keyboard event tap now prefers cghidEventTap and automatically re-enables itself if macOS disables it after timeout/user-input recursion.
+- Caps Lock state no longer prevents an otherwise exact imported shortcut unless Caps Lock is explicitly part of that shortcut.
+- Bluetooth helper is now packaged as Contents/Helpers/BTTLiteBluetoothHelper.app with its own Info.plist and NSBluetoothAlwaysUsageDescription, while remaining a short-lived process so the main agent's idle RSS is unchanged.
+- Bluetooth action failures are no longer silent: if the helper launches but cannot find/toggle the paired device or is denied, BTT Lite shows the helper error in an alert. This separates “hotkey not detected” from “Bluetooth operation failed” during real-device testing.
+- CI verifies the nested helper executable, signature, and Bluetooth purpose string.
+
+Retest contract:
+1. With Finder frontmost, Fn+4 must NOT select a file or type “4”.
+2. With a text field focused, Fn+4 must NOT insert “4”.
+3. On the first actual Bluetooth attempt, macOS may ask for Bluetooth permission; allow it.
+4. If Bluetooth still cannot toggle, BTT Lite must now show a concrete “Bluetooth action failed” diagnostic instead of silently doing nothing.
