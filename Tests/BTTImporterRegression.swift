@@ -90,6 +90,20 @@ struct BTTImporterRegression {
         assert(mouseGesture.modifiers?.contains(.option) == true, "gesture Option guard lost")
         assert(mouseGesture.modifierSides?.contains(.leftOption) == true, "gesture left Option side lost")
 
+        let runShortcut = RuleAction(
+            kind: .runShortcut,
+            title: "Run Shortcut from Shortcuts App",
+            parameters: ["name": "Imgur"]
+        )
+        assert(runShortcut.displaySummary == "Run Shortcut: Imgur", "Shortcut target missing from browser summary")
+
+        let bluetooth = RuleAction(
+            kind: .toggleBluetoothDevice,
+            title: "Toggle Bluetooth Device Connection",
+            parameters: ["deviceName": "Win"]
+        )
+        assert(bluetooth.displaySummary == "Toggle Bluetooth Device Connection: Win", "Bluetooth device missing from browser summary")
+
         print("BTTImporterRegression: OK")
     }
 }

@@ -238,7 +238,67 @@ struct RuleAction: Codable, Identifiable, Equatable {
     var sourceMetadata: [String: String] = [:]
 }
 
+
+extension RuleAction {
+    /// Concise BTT-style summary used by the trigger browser.
+    /// Prefer the concrete target (Shortcut/device/key) over a generic imported action title.
+    var displaySummary: String {
+        switch kind {
+        case .sendShortcut:
+            let keyCode = UInt16(parameters["keyCode"] ?? "") ?? 0
+            let key = parameters["displayKey"].flatMap { $0.isEmpty ? nil : $0 } ?? "Key " + String(keyCode)
+            let modifiers = ModifierSet(rawValue: UInt64(parameters["modifiers"] ?? "") ?? 0)
+            let sides = ModifierSideSet(rawValue: UInt64(parameters["modifierSides"] ?? "") ?? 0)
+            let prefix = sides.isEmpty ? modifiers.symbols : sides.symbols(generic: modifiers)
+            return "Send Keyboard Shortcut: " + prefix + key
+        case .runShortcut:
+            return titled("Run Shortcut", value: parameters["name"])
+        case .launchPath:
+            if let path = parameters["path"], !path.isEmpty {
+                return "Launch: " + URL(fileURLWithPath: path).lastPathComponent
+            }
+            return title
+        case .openURL:
+            return titled("Open URL", value: parameters["url"])
+        case .toggleBluetoothDevice:
+            return titled("Toggle Bluetooth Device Connection", value: parameters["deviceName"])
+        case .builtIn:
+            if let name = parameters["name"], !name.isEmpty { return name }
+            return title
+        default:
+            return title.isEmpty ? kind.displayName : title
+        }
+    }
+
+    private func titled(_ fallback: String, value: String?) -> String {
+        guard let value, !value.isEmpty else { return title.isEmpty ? fallback : title }
+        return fallback + ": " + value
+    }
+}
+
 extension Trigger {
+    var compactDisplayName: String {
+        switch self {
+        case let .keyboard(k):
+            let prefix = k.differentiateModifierSides == true
+                ? (k.modifierSides ?? []).symbols(generic: k.modifiers)
+                : k.modifiers.symbols
+            return prefix + k.displayKey
+        case let .gesture(g):
+            let generic = g.modifiers ?? []
+            let modifierPrefix = g.differentiateModifierSides == true
+                ? (g.modifierSides ?? []).symbols(generic: generic)
+                : generic.symbols
+            let base = "\(modifierPrefix)\(g.fingers) Finger \(g.gesture.displayName)"
+            if let direction = g.direction { return "\(base) \(direction.rawValue.capitalized)" }
+            return base
+        case let .systemKey(k):
+            return k.displayName
+        case let .unsupported(description, _):
+            return description
+        }
+    }
+
     var displayName: String {
         switch self {
         case let .keyboard(k):

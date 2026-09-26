@@ -532,3 +532,39 @@ Recommended Magic Mouse layout for the user's new plan:
 - macOS: 2-finger left/right = Spaces; 1-finger left/right = page back/forward.
 - BTT Lite: old 3-finger left/right Space rules disabled; old 2-finger horizontal page rules disabled.
 - Optional custom close/restore: 2-finger Up/Down plus a chosen modifier guard. Do not configure bare 2-finger vertical swipe if accidental activation while manipulating the mouse would be undesirable.
+
+
+## C15 — BTT-style import browser and concrete action summaries
+
+Status: implemented; macOS arm64 CI validation pending at commit time.
+
+User problem / visual target:
+- After importing the BetterTouchTool preset, the flat BTT Lite list made it difficult to see which application scope, trigger and gesture belonged to which action.
+- The user supplied side-by-side screenshots of BetterTouchTool and BTT Lite and requested the familiar BetterTouchTool visual structure, especially the application grouping and trigger → action readability.
+
+Changes:
+- Reworked Settings into a three-pane browser: application scopes on the left, triggers in the middle and the existing detailed editor on the right.
+- The left pane now shows **For All Apps** plus application scopes reconstructed from the imported rules in first-seen preset order.
+- Replaced the single category popup with a BTT-like trigger category strip for All / Keyboard / Mouse / Trackpad / Other, with native SF Symbol icons.
+- Application scope and trigger category are independent filters, matching the mental model of BetterTouchTool rather than flattening all imported rules together.
+- Trigger rows now use a native trigger icon, a concise trigger title on the first line and a BTT-style **Action: ...** summary on the second line.
+- Action summaries expose the concrete target when available: e.g. **Run Shortcut: Imgur**, **Toggle Bluetooth Device Connection: Win**, the actual keyboard shortcut, launch target or URL.
+- Multi-action rules use the familiar **and N more** form. Rules/actions that are disabled remain visible and are visually de-emphasized instead of becoming ambiguous.
+- Gesture rows use a compact title such as **2 Finger Swipe Up**; the device is already communicated by the selected Mouse/Trackpad category.
+- New rules inherit the currently selected application scope in the sidebar.
+- No configuration migration is required. Existing C12/C14 `config.json` data is only presented differently; trigger/action runtime semantics are unchanged.
+
+Resource impact:
+- The new controls exist only while the Settings window is open.
+- No new background service, polling loop, database, WebView or runtime framework was added, so idle-agent resource use is unchanged.
+
+Regression coverage:
+- Added pure-model checks that concrete Shortcut and Bluetooth targets are present in the browser-facing action summaries.
+- Existing importer, keyboard/system shortcut, gesture and packaged-app tests remain in CI.
+
+Retest contract:
+1. Install over the existing BTT Lite configuration; do **not** reimport unless explicitly testing import.
+2. Confirm the left pane shows **For All Apps** and the application names from the preset (for example Finder / Google Chrome where rules exist).
+3. Select Keyboard / Mouse / Trackpad and confirm the middle list changes without losing the selected application scope.
+4. Confirm each row is readable as **trigger** on line 1 and **Action: concrete target** on line 2, including Fn shortcuts and Bluetooth/Shortcuts actions.
+5. Confirm selecting a row still opens the same editable rule/action configuration on the right.

@@ -5,7 +5,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let store: ConfigStore
 
     private let profilePopup = NSPopUpButton()
-    private let categoryPopup = NSPopUpButton()
+    private let scopeTable = NSTableView()
+    private let categoryControl = NSSegmentedControl(
+        labels: ["All", "Keyboard", "Mouse", "Trackpad", "Other"],
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
     private let rulesTable = NSTableView()
     private let editorScroll = NSScrollView()
     private let editorDocument = NSView()
@@ -40,6 +46,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let secondaryField = NSTextField()
     private let actionShortcutButton = NSButton(title: "Record Shortcut…", target: nil, action: nil)
 
+    private enum ScopeItem: Equatable {
+        case global
+        case application(name: String, bundleIdentifier: String)
+
+        var title: String {
+            switch self {
+            case .global: return "For All Apps"
+            case let .application(name, _): return name.isEmpty ? "Application" : name
+            }
+        }
+
+        var ruleScope: RuleScope {
+            switch self {
+            case .global: return .global
+            case let .application(name, bundleIdentifier):
+                return .application(name: name, bundleIdentifier: bundleIdentifier)
+            }
+        }
+    }
+
+    private var scopeItems: [ScopeItem] = [.global]
+    private var selectedScope: ScopeItem = .global
     private var visibleRules: [Rule] = []
     private var shortcutMonitor: Any?
     private enum ShortcutRecordTarget { case trigger, action }
@@ -51,7 +79,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     init(store: ConfigStore) {
         self.store = store
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1120, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 1380, height: 760),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -105,11 +133,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         split.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(split)
 
-        let left = buildRulesPane()
+        let scopes = buildScopePane()
+        let rules = buildRulesPane()
         let right = buildEditorPane()
-        split.addArrangedSubview(left)
+        split.addArrangedSubview(scopes)
+        split.addArrangedSubview(rules)
         split.addArrangedSubview(right)
-        left.widthAnchor.constraint(greaterThanOrEqualToConstant: 390).isActive = true
+        scopes.widthAnchor.constraint(greaterThanOrEqualToConstant: 170).isActive = true
+        scopes.widthAnchor.constraint(lessThanOrEqualToConstant: 240).isActive = true
+        rules.widthAnchor.constraint(greaterThanOrEqualToConstant: 450).isActive = true
         right.widthAnchor.constraint(greaterThanOrEqualToConstant: 560).isActive = true
 
         NSLayoutConstraint.activate([
@@ -124,15 +156,63 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         ])
     }
 
+    private func buildScopePane() -> NSView {
+        let pane = NSView()
+        pane.translatesAutoresizingMaskIntoConstraints = false
+
+        let heading = NSTextField(labelWithString: "Applications")
+        heading.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        heading.textColor = .secondaryLabelColor
+        heading.translatesAutoresizingMaskIntoConstraints = false
+        pane.addSubview(heading)
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        pane.addSubview(scroll)
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("scope"))
+        column.title = "Applications"
+        column.width = 210
+        scopeTable.addTableColumn(column)
+        scopeTable.headerView = nil
+        scopeTable.rowHeight = 34
+        scopeTable.dataSource = self
+        scopeTable.delegate = self
+        scroll.documentView = scopeTable
+
+        NSLayoutConstraint.activate([
+            heading.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 12),
+            heading.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -8),
+            heading.topAnchor.constraint(equalTo: pane.topAnchor, constant: 13),
+            scroll.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 8),
+            scroll.bottomAnchor.constraint(equalTo: pane.bottomAnchor)
+        ])
+        return pane
+    }
+
     private func buildRulesPane() -> NSView {
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
 
-        categoryPopup.addItems(withTitles: RuleCategory.allCases.map(\.rawValue))
-        categoryPopup.target = self
-        categoryPopup.action = #selector(categoryChanged)
-        categoryPopup.translatesAutoresizingMaskIntoConstraints = false
-        pane.addSubview(categoryPopup)
+        categoryControl.selectedSegment = 0
+        categoryControl.segmentStyle = .rounded
+        categoryControl.target = self
+        categoryControl.action = #selector(categoryChanged)
+        categoryControl.translatesAutoresizingMaskIntoConstraints = false
+        pane.addSubview(categoryControl)
+
+        let symbols = ["square.grid.2x2", "keyboard", "computermouse", "rectangle.and.hand.point.up.left", "ellipsis.circle"]
+        for (index, symbol) in symbols.enumerated() {
+            if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: categoryControl.label(forSegment: index)) {
+                categoryControl.setImage(image, forSegment: index)
+            }
+        }
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -146,7 +226,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         column.width = 390
         rulesTable.addTableColumn(column)
         rulesTable.headerView = nil
-        rulesTable.rowHeight = 42
+        rulesTable.rowHeight = 54
         rulesTable.dataSource = self
         rulesTable.delegate = self
         rulesTable.target = self
@@ -164,12 +244,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         buttons.addArrangedSubview(NSView())
 
         NSLayoutConstraint.activate([
-            categoryPopup.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 10),
-            categoryPopup.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -10),
-            categoryPopup.topAnchor.constraint(equalTo: pane.topAnchor, constant: 10),
+            categoryControl.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 10),
+            categoryControl.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -10),
+            categoryControl.topAnchor.constraint(equalTo: pane.topAnchor, constant: 10),
             scroll.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 10),
             scroll.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -6),
-            scroll.topAnchor.constraint(equalTo: categoryPopup.bottomAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: categoryControl.bottomAnchor, constant: 8),
             scroll.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -8),
             buttons.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 10),
             buttons.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -6),
@@ -396,6 +476,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         profilePopup.addItems(withTitles: store.configuration.profiles.map(\.name))
         if let index = store.configuration.activeProfileIndex { profilePopup.selectItem(at: index) }
 
+        rebuildScopeItems()
+        scopeTable.reloadData()
+        if let scopeIndex = scopeItems.firstIndex(of: selectedScope) {
+            scopeTable.selectRowIndexes(IndexSet(integer: scopeIndex), byExtendingSelection: false)
+        }
+
         rebuildVisibleRules()
         rulesTable.reloadData()
 
@@ -415,48 +501,189 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         isReloading = false
     }
 
-    private func rebuildVisibleRules() {
-        guard let profile = store.activeProfile() else { visibleRules = []; return }
-        let category = RuleCategory.allCases[categoryPopup.indexOfSelectedItem.clamped(to: 0...(RuleCategory.allCases.count - 1))]
-        visibleRules = profile.rules.filter { rule in
-            switch category {
-            case .all: true
-            case .global:
-                if case .global = rule.scope { true } else { false }
-            case .keyboard, .magicMouse, .trackpad, .other: rule.trigger.category == category
-            case .applications:
-                if case .application = rule.scope { true } else { false }
+    private func rebuildScopeItems() {
+        guard let profile = store.activeProfile() else {
+            scopeItems = [.global]
+            selectedScope = .global
+            return
+        }
+
+        let previous = selectedScope
+        var next: [ScopeItem] = [.global]
+        var seen = Set<String>()
+        for rule in profile.rules {
+            guard case let .application(name, bundleIdentifier) = rule.scope else { continue }
+            let key = bundleIdentifier.isEmpty ? "name:" + name : "bundle:" + bundleIdentifier
+            if seen.insert(key).inserted {
+                next.append(.application(name: name, bundleIdentifier: bundleIdentifier))
             }
+        }
+        scopeItems = next
+        selectedScope = next.contains(previous) ? previous : .global
+    }
+
+    private func selectedCategory() -> RuleCategory {
+        switch categoryControl.selectedSegment {
+        case 1: return .keyboard
+        case 2: return .magicMouse
+        case 3: return .trackpad
+        case 4: return .other
+        default: return .all
         }
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { visibleRules.count }
+    private func scopeMatches(_ scope: RuleScope) -> Bool {
+        switch (selectedScope, scope) {
+        case (.global, .global):
+            return true
+        case let (.application(selectedName, selectedBundle), .application(name, bundle)):
+            if !selectedBundle.isEmpty || !bundle.isEmpty { return selectedBundle == bundle }
+            return selectedName == name
+        default:
+            return false
+        }
+    }
+
+    private func rebuildVisibleRules() {
+        guard let profile = store.activeProfile() else { visibleRules = []; return }
+        let category = selectedCategory()
+        visibleRules = profile.rules.filter { rule in
+            guard scopeMatches(rule.scope) else { return false }
+            if category == .all { return true }
+            return rule.trigger.category == category
+        }
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        tableView === scopeTable ? scopeItems.count : visibleRules.count
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let rule = visibleRules[row]
-        let id = NSUserInterfaceItemIdentifier("RuleCell")
-        let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? NSTableCellView()
-        cell.identifier = id
-        if cell.textField == nil {
-            let text = NSTextField(wrappingLabelWithString: "")
-            text.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(text)
-            cell.textField = text
-            NSLayoutConstraint.activate([
-                text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
-                text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
-                text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
-            ])
+        if tableView === scopeTable {
+            guard row >= 0, row < scopeItems.count else { return nil }
+            return makeScopeCell(scopeItems[row])
         }
-        let state = rule.enabled ? "●" : "○"
-        let actions = rule.actions.filter(\.enabled).map(\.title).joined(separator: " + ")
-        cell.textField?.stringValue = "\(state)  \(rule.trigger.displayName)\n\(actions.isEmpty ? "No enabled actions" : actions)"
-        cell.textField?.textColor = rule.enabled ? .labelColor : .secondaryLabelColor
+        guard row >= 0, row < visibleRules.count else { return nil }
+        return makeRuleCell(visibleRules[row])
+    }
+
+    private func makeScopeCell(_ item: ScopeItem) -> NSView {
+        let cell = NSTableCellView()
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(
+            systemSymbolName: item == .global ? "globe" : "app",
+            accessibilityDescription: item.title
+        )
+        icon.contentTintColor = .secondaryLabelColor
+        cell.addSubview(icon)
+
+        let text = NSTextField(labelWithString: item.title)
+        text.font = NSFont.systemFont(ofSize: 13)
+        text.lineBreakMode = .byTruncatingTail
+        text.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(text)
+        cell.textField = text
+
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
+            icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 18),
+            text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
+            text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+            text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+        ])
         return cell
     }
 
+    private func makeRuleCell(_ rule: Rule) -> NSView {
+        let cell = NSTableCellView()
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(
+            systemSymbolName: triggerIconName(for: rule.trigger),
+            accessibilityDescription: rule.trigger.compactDisplayName
+        )
+        icon.contentTintColor = rule.enabled ? .labelColor : .tertiaryLabelColor
+        cell.addSubview(icon)
+
+        let title = NSTextField(labelWithString: rule.trigger.compactDisplayName)
+        title.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        title.lineBreakMode = .byTruncatingTail
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let detail = NSTextField(labelWithString: actionListSummary(for: rule))
+        detail.font = NSFont.systemFont(ofSize: 12)
+        detail.textColor = .secondaryLabelColor
+        detail.lineBreakMode = .byTruncatingTail
+        detail.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [title, detail])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 1
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(stack)
+        cell.textField = title
+        cell.alphaValue = rule.enabled ? 1.0 : 0.55
+        cell.toolTip = rule.name
+
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 24),
+            icon.heightAnchor.constraint(equalToConstant: 24),
+            stack.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 9),
+            stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+        ])
+        return cell
+    }
+
+    private func triggerIconName(for trigger: Trigger) -> String {
+        switch trigger {
+        case .keyboard: return "keyboard"
+        case let .gesture(gesture):
+            return gesture.device == .magicMouse ? "computermouse" : "rectangle.and.hand.point.up.left"
+        case .systemKey: return "keyboard.badge.ellipsis"
+        case .unsupported: return "questionmark.square.dashed"
+        }
+    }
+
+    private func actionListSummary(for rule: Rule) -> String {
+        let enabled = rule.actions.filter(\.enabled)
+        let actions = enabled.isEmpty ? rule.actions : enabled
+        guard let first = actions.first else { return "No actions" }
+        let disabledSuffix = enabled.isEmpty ? " (disabled)" : ""
+        if actions.count == 1 {
+            return "Action: " + first.displaySummary + disabledSuffix
+        }
+        return "Action: " + first.displaySummary + " and " + String(actions.count - 1) + " more" + disabledSuffix
+    }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard !isReloading else { return }
+        guard !isReloading, let tableView = notification.object as? NSTableView else { return }
+
+        if tableView === scopeTable {
+            let row = scopeTable.selectedRow
+            guard row >= 0, row < scopeItems.count else { return }
+            selectedScope = scopeItems[row]
+            selectedRuleID = nil
+            selectedActionID = nil
+            rebuildVisibleRules()
+            rulesTable.reloadData()
+            if let first = visibleRules.first {
+                selectedRuleID = first.id
+                selectedActionID = first.actions.first?.id
+                rulesTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            }
+            reloadEditor()
+            return
+        }
+
+        guard tableView === rulesTable else { return }
         let row = rulesTable.selectedRow
         guard row >= 0, row < visibleRules.count else { return }
         selectedRuleID = visibleRules[row].id
@@ -624,6 +851,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     @objc private func profileChanged() {
         guard !isReloading, profilePopup.indexOfSelectedItem >= 0 else { return }
         let id = store.configuration.profiles[profilePopup.indexOfSelectedItem].id
+        selectedScope = .global
         selectedRuleID = nil
         selectedActionID = nil
         store.setActiveProfile(id)
@@ -642,6 +870,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let imported = try BTTImporter().importPreset(from: url)
+            selectedScope = .global
             store.mutate { config in
                 config.profiles.append(imported)
                 config.activeProfileID = imported.id
@@ -653,10 +882,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
 
     @objc private func addRule() {
         var profile = store.activeProfile() ?? Profile(name: "Default", rules: [])
-        let category = RuleCategory.allCases[categoryPopup.indexOfSelectedItem.clamped(to: 0...(RuleCategory.allCases.count - 1))]
+        let category = selectedCategory()
 
         let trigger: Trigger
-        var scope: RuleScope = .global
+        let scope = selectedScope.ruleScope
         var name = "New Trigger"
 
         switch category {
@@ -669,12 +898,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         case .other:
             trigger = .unsupported(description: "New Unsupported Trigger", rawType: nil)
             name = "New Other Trigger"
-        case .applications:
-            trigger = .keyboard(KeyboardTrigger(keyCode: 0, displayKey: "A", modifiers: []))
-            let app = NSWorkspace.shared.frontmostApplication
-            scope = .application(name: app?.localizedName ?? "Application", bundleIdentifier: app?.bundleIdentifier ?? "")
-            name = "New Application Trigger"
-        case .all, .global, .keyboard:
+        case .applications, .all, .global, .keyboard:
             trigger = .keyboard(KeyboardTrigger(keyCode: 0, displayKey: "A", modifiers: []))
             name = "New Keyboard Trigger"
         }
