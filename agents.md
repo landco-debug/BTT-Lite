@@ -124,3 +124,28 @@ Compatibility note:
 
 Next planned commit:
 - C04: close remaining imported-action gaps (on-demand JavaScript selection transform and clipboard-history behavior), then package a testable artifact and measure real idle RSS/CPU on the user's M1.
+
+
+## C04 — On-demand JavaScript selection transform
+
+Status: implemented; macOS arm64 CI will compile both the main agent and the new helper.
+
+Changes:
+- Implemented the active imported BetterTouchTool action “Transform & Replace Selection With Java Script”.
+- The main agent copies the current selection, sends the text plus the user-configured script to a short-lived bundled helper, writes the returned text to the pasteboard and pastes it back over the selection.
+- JavaScriptCore is linked only by `BTTLiteJavaScriptHelper`, never by the always-running BTT Lite process, so the feature adds no persistent JavaScript engine to idle RSS.
+- The helper exposes a minimal Promise-based `fetch()` compatibility layer backed by Foundation `URLSession`; this supports the exact async Google-Translate script present in the reference preset, including `response.ok`, `status`, `json()`, `text()` and `encodeURIComponent`.
+- Helper requests/results use JSON over stdin/stdout, avoiding shell quoting and command-line length issues.
+- Network and JavaScript timeouts are bounded; failures leave the current selection unchanged and only log an error.
+- The two clipboard-history actions in the supplied preset are both disabled, so their full BTT history UI remains preserved/configurable but intentionally unimplemented at this milestone; no always-on clipboard polling was added.
+
+Resource rationale:
+- JavaScriptCore and network machinery exist only in a process created when this action is invoked.
+- No new background timer, database or resident service was introduced.
+
+Validation performed before commit:
+- Main, Bluetooth-helper and JavaScript-helper Swift sources parse successfully.
+- C03 builds successfully on GitHub's macOS 15 arm64 runner before C04 is layered.
+
+Next planned commit:
+- C05: produce the first installable test artifact from CI, add lightweight runtime diagnostics for RSS/CPU/device status, and use the user's real preset for on-device functional testing without committing personal preset data.

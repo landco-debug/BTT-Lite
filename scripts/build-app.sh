@@ -17,6 +17,7 @@ swift build -c release --arch arm64
 BIN_DIR="$(swift build -c release --arch arm64 --show-bin-path)"
 cp "$BIN_DIR/$PRODUCT" "$APP/Contents/MacOS/$PRODUCT"
 cp "$BIN_DIR/BTTLiteBluetoothHelper" "$APP/Contents/Helpers/BTTLiteBluetoothHelper"
+cp "$BIN_DIR/BTTLiteJavaScriptHelper" "$APP/Contents/Helpers/BTTLiteJavaScriptHelper"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

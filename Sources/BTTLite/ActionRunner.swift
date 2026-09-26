@@ -45,9 +45,9 @@ final class ActionRunner {
                 await runProcess("/usr/bin/osascript", arguments: ["-e", script])
             }
         case .javascriptTransform:
-            // Kept separate from the always-on process. A dedicated helper will
-            // be added so JavaScriptCore/network support does not inflate idle RSS.
-            NSLog("BTT Lite: JavaScript transform is preserved but not executable yet")
+            if let script = action.parameters["script"], !script.isEmpty {
+                await transformSelectionWithJavaScript(script: script)
+            }
         case .waitForClipboardChange:
             let timeout = Double(action.parameters["timeout"] ?? "") ?? 5.0
             await waitForClipboardChange(timeout: max(0.1, timeout))
@@ -74,6 +74,42 @@ final class ActionRunner {
         case .builtIn, .unsupported:
             NSLog("BTT Lite: skipped preserved action: %@", action.title)
         }
+    }
+
+    private struct JavaScriptTransformRequest: Codable {
+        var script: String
+        var text: String
+    }
+
+    private struct JavaScriptTransformResponse: Codable {
+        var ok: Bool
+        var result: String?
+        var error: String?
+    }
+
+    private func transformSelectionWithJavaScript(script: String) async {
+        let pasteboard = NSPasteboard.general
+        let initialChangeCount = pasteboard.changeCount
+        sendKeyCode(8, modifiers: [.command]) // ⌘C
+        await waitForClipboardChange(timeout: 1.0)
+        guard pasteboard.changeCount != initialChangeCount,
+              let selectedText = pasteboard.string(forType: .string) else {
+            NSLog("BTT Lite: JavaScript transform could not copy the current selection")
+            return
+        }
+
+        let request = JavaScriptTransformRequest(script: script, text: selectedText)
+        guard let requestData = try? JSONEncoder().encode(request),
+              let responseData = await runBundledHelperCapture("BTTLiteJavaScriptHelper", stdin: requestData),
+              let response = try? JSONDecoder().decode(JavaScriptTransformResponse.self, from: responseData),
+              response.ok, let replacement = response.result else {
+            NSLog("BTT Lite: JavaScript transform helper failed")
+            return
+        }
+
+        pasteboard.clearContents()
+        pasteboard.setString(replacement, forType: .string)
+        sendKeyCode(9, modifiers: [.command]) // ⌘V
     }
 
     private func sendShortcut(_ action: RuleAction) {
@@ -142,6 +178,40 @@ final class ActionRunner {
             .appendingPathComponent("Helpers", isDirectory: true)
             .appendingPathComponent(name)
         await runProcess(url.path, arguments: arguments)
+    }
+
+    private func runBundledHelperCapture(_ name: String, stdin: Data) async -> Data? {
+        let url = Bundle.main.bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Helpers", isDirectory: true)
+            .appendingPathComponent(name)
+        return await runProcessCapture(url.path, arguments: [], stdin: stdin)
+    }
+
+    private func runProcessCapture(_ executable: String, arguments: [String], stdin: Data) async -> Data? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let inputPipe = Pipe()
+                let outputPipe = Pipe()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = arguments
+                process.standardInput = inputPipe
+                process.standardOutput = outputPipe
+                process.standardError = FileHandle.nullDevice
+                do {
+                    try process.run()
+                    inputPipe.fileHandleForWriting.write(stdin)
+                    try? inputPipe.fileHandleForWriting.close()
+                    let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    continuation.resume(returning: process.terminationStatus == 0 ? output : nil)
+                } catch {
+                    NSLog("BTT Lite: helper failed: %@", String(describing: error))
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
     }
 
     private func activateHoveredDockApp() {

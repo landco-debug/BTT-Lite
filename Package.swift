@@ -6,7 +6,8 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "BTTLite", targets: ["BTTLite"]),
-        .executable(name: "BTTLiteBluetoothHelper", targets: ["BTTLiteBluetoothHelper"])
+        .executable(name: "BTTLiteBluetoothHelper", targets: ["BTTLiteBluetoothHelper"]),
+        .executable(name: "BTTLiteJavaScriptHelper", targets: ["BTTLiteJavaScriptHelper"])
     ],
     targets: [
         .executableTarget(
@@ -18,6 +19,11 @@ let package = Package(
             name: "BTTLiteBluetoothHelper",
             path: "Sources/BTTLiteBluetoothHelper",
             linkerSettings: [.linkedFramework("IOBluetooth")]
+        ),
+        .executableTarget(
+            name: "BTTLiteJavaScriptHelper",
+            path: "Sources/BTTLiteJavaScriptHelper",
+            linkerSettings: [.linkedFramework("JavaScriptCore")]
         )
     ],
     swiftLanguageModes: [.v5]
