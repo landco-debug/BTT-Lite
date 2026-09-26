@@ -34,6 +34,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSUIElement</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>BTT Lite uses automation only for actions explicitly configured by the user.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key><string>BTT Lite uses Bluetooth only when you run a configured connect, disconnect, or toggle action for a paired device.</string>
 </dict>
 </plist>
 PLIST

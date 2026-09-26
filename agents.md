@@ -283,3 +283,39 @@ Regression coverage:
 Retest focus:
 - Keep macOS native 3-finger left/right Space switching enabled and BTT Lite vertical 3-finger actions enabled.
 - Repeatedly perform left/right, up/down and deliberately diagonal 3-finger movements. Wrong-axis actions and 2-finger page-navigation leakage should be gone; intentionally diagonal gestures may be ignored by design.
+
+
+## C09 — Restore closed web-app context and repair Fn/Bluetooth path
+
+Status: implemented from the next on-device report; macOS CI validation pending at commit time.
+
+User report:
+- The imported 3-finger Swipe Up behaves differently from BTT for browser/web-app workflows: BTT restores the recently closed item/app, BTT Lite does not.
+- Fn+4 still does not toggle the configured Bluetooth device.
+
+Exact preset facts verified locally (personal device identifiers are intentionally not committed):
+- Trackpad 3 Finger Swipe Up is a Send Keyboard Shortcut action for ⇧⌘T.
+- The matching close workflow uses ⌘W.
+- Fn+4 is keyCode 21 with the Function/Fn modifier bit (8388608); the Bluetooth toggle action is enabled and an unrelated Shortcut action in that same rule is disabled.
+
+Root causes found in BTT Lite:
+- Send Keyboard Shortcut was always posted to the current global foreground context. After ⌘W closes the last window of a standalone browser/web app, macOS can move focus to another app; the later ⇧⌘T therefore goes to the wrong process. BTT's behavior preserves the useful close/restore context.
+- The Fn trigger path listened only to keyDown/keyUp. Apple exposes Fn as `maskSecondaryFn` and also reports modifier changes through flagsChanged/source-state APIs; relying on only the keyDown event's flags is brittle on laptop keyboards.
+- The packaged app did not declare `NSBluetoothAlwaysUsageDescription`. Bluetooth is a protected macOS resource, so a child helper can be denied/terminated by TCC when the responsible app lacks that purpose string. This is a concrete packaging bug, not a device-address/import problem.
+
+Changes:
+- ⌘W now remembers the frontmost application context for ten minutes.
+- A later ⇧⌘T first restores that remembered target: if it is still running, BTT Lite activates it and posts the shortcut directly to its PID; if a standalone web app terminated after its last window closed, BTT Lite reopens the remembered app bundle instead of sending ⇧⌘T to an unrelated foreground app.
+- The close/restore context logic lives in ActionRunner, so it applies to the same shortcut pair regardless of whether the trigger came from Trackpad, Magic Mouse, keyboard, or an application-specific rule.
+- KeyboardEngine now observes flagsChanged and combines event flags with current combined-session/HID source flags. This makes Fn/Globe modifier matching robust for imported Fn+number shortcuts while preserving exact modifier matching for ordinary hotkeys.
+- Added the required `NSBluetoothAlwaysUsageDescription` purpose string to the packaged app. The Bluetooth helper remains short-lived, so IOBluetooth still adds no idle RSS to the main agent.
+- Bluetooth helper now only acts on paired devices, retries disconnect long enough for profile teardown, and retries connection attempts for sleeping devices.
+- CI now asserts that the packaged Info.plist actually contains the Bluetooth purpose string.
+
+Expected first-run behavior after replacing C08:
+- The first real Bluetooth action may cause macOS to show a Bluetooth privacy prompt for BTT Lite. It must be allowed once. Existing Accessibility/Input Monitoring grants are separate.
+
+Retest:
+- Close a standalone browser/web app with the configured ⌘W swipe, then restore it with the ⇧⌘T swipe.
+- Test the same close/restore pair in an ordinary browser tab/window.
+- Press Fn+4 with Bluetooth already enabled; allow the Bluetooth permission prompt if macOS shows it, then verify disconnect and reconnect on consecutive presses.

@@ -19,65 +19,57 @@ func normalizedAddress(_ value: String) -> String {
         .lowercased()
 }
 
-func formattedAddress(_ normalized: String, separator: String) -> String? {
-    guard normalized.count == 12 else { return nil }
-    var parts: [String] = []
-    var index = normalized.startIndex
-    for _ in 0..<6 {
-        let next = normalized.index(index, offsetBy: 2)
-        parts.append(String(normalized[index..<next]))
-        index = next
-    }
-    return parts.joined(separator: separator)
-}
-
 let wanted = normalizedAddress(requestedAddress)
 let paired = IOBluetoothDevice.pairedDevices().compactMap { $0 as? IOBluetoothDevice }
 
-var device = paired.first { candidate in
-    guard let address = candidate.addressString else { return false }
-    return !wanted.isEmpty && normalizedAddress(address) == wanted
-}
-
-if device == nil, !requestedName.isEmpty {
-    device = paired.first { candidate in
+guard let device = paired.first(where: { candidate in
+    if !wanted.isEmpty, let address = candidate.addressString,
+       normalizedAddress(address) == wanted {
+        return true
+    }
+    if !requestedName.isEmpty {
         let name = candidate.name ?? candidate.nameOrAddress ?? ""
         return name.caseInsensitiveCompare(requestedName) == .orderedSame
     }
-}
-
-if device == nil, !wanted.isEmpty {
-    var candidates = [requestedAddress]
-    if let colon = formattedAddress(wanted, separator: ":") { candidates.append(colon) }
-    if let hyphen = formattedAddress(wanted, separator: "-") { candidates.append(hyphen) }
-    for candidate in candidates {
-        if let resolved = IOBluetoothDevice(addressString: candidate) {
-            device = resolved
-            break
-        }
-    }
-}
-
-guard let device else {
-    fputs("Bluetooth device not found\n", stderr)
+    return false
+}) else {
+    fputs("Bluetooth device is not present in the paired-device list\n", stderr)
     exit(2)
 }
 
+guard device.isPaired() else {
+    fputs("Bluetooth device is not paired\n", stderr)
+    exit(4)
+}
+
 if device.isConnected() {
-    var status: IOReturn = kIOReturnSuccess
-    for _ in 0..<6 {
-        status = device.closeConnection()
-        if status != kIOReturnSuccess { break }
-        if !device.isConnected() { exit(0) }
-        Thread.sleep(forTimeInterval: 0.15)
+    // A single closeConnection can report success before every profile/transport
+    // has fully dropped. Mirror mature CLI tools and retry for a few seconds.
+    for _ in 0..<10 {
+        let status = device.closeConnection()
+        if !device.isConnected() {
+            print("disconnected")
+            exit(0)
+        }
+        if status != kIOReturnSuccess {
+            fputs("Bluetooth disconnect failed: \(status)\n", stderr)
+            exit(3)
+        }
+        Thread.sleep(forTimeInterval: 0.50)
     }
-    exit(!device.isConnected() ? 0 : 3)
+    exit(device.isConnected() ? 3 : 0)
 } else {
-    let status = device.openConnection()
-    guard status == kIOReturnSuccess else { exit(3) }
-    for _ in 0..<20 {
-        if device.isConnected() { exit(0) }
-        Thread.sleep(forTimeInterval: 0.10)
+    // openConnection() is synchronous for IOBluetoothDevice, but sleeping devices
+    // can need more than one page attempt on current macOS hardware.
+    var lastStatus: IOReturn = kIOReturnSuccess
+    for _ in 0..<3 {
+        lastStatus = device.openConnection()
+        if device.isConnected() {
+            print("connected")
+            exit(0)
+        }
+        Thread.sleep(forTimeInterval: 0.75)
     }
-    exit(device.isConnected() ? 0 : 3)
+    fputs("Bluetooth connect failed: \(lastStatus)\n", stderr)
+    exit(3)
 }

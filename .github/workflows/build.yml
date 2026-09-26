@@ -35,6 +35,7 @@ jobs:
           test -x "$APP/Contents/Helpers/BTTLiteJavaScriptHelper"
           /usr/bin/codesign --verify --deep --strict "$APP"
           /usr/bin/file "$APP/Contents/MacOS/BTTLite" | /usr/bin/grep -q "arm64"
+          /usr/libexec/PlistBuddy -c "Print :NSBluetoothAlwaysUsageDescription" "$APP/Contents/Info.plist" | /usr/bin/grep -q "Bluetooth"
           printf '%s' '{"script":"async (text) => text.toUpperCase()","text":"hello"}'             | "$APP/Contents/Helpers/BTTLiteJavaScriptHelper" > /tmp/btt-js-smoke.json
           /usr/bin/python3 - <<'PY'
           import json

@@ -11,6 +11,7 @@ final class KeyboardEngine {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var suppressedKeyUps: Set<UInt16> = []
+    private var liveModifierFlags: ModifierSet = []
 
     init(store: ConfigStore, runner: ActionRunner) {
         self.store = store
@@ -34,6 +35,7 @@ final class KeyboardEngine {
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) |
                    CGEventMask(1 << CGEventType.keyUp.rawValue) |
+                   CGEventMask(1 << CGEventType.flagsChanged.rawValue) |
                    CGEventMask(1 << Self.systemDefinedEventType.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -75,11 +77,17 @@ final class KeyboardEngine {
         runLoopSource = nil
         eventTap = nil
         suppressedKeyUps.removeAll(keepingCapacity: true)
+        liveModifierFlags = []
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Bool {
         let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         if frontmostBundleID == Bundle.main.bundleIdentifier { return false }
+
+        if type == .flagsChanged {
+            liveModifierFlags = currentModifiers(eventFlags: event.flags)
+            return false
+        }
 
         if type == .keyUp {
             let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
@@ -92,7 +100,7 @@ final class KeyboardEngine {
         let matching: [Rule]
         if type == .keyDown {
             let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-            let modifiers = ModifierSet(rawValue: UInt64(event.flags.rawValue)).intersection(.userRelevant)
+            let modifiers = currentModifiers(eventFlags: event.flags)
             matching = profile.rules.filter { rule in
                 guard rule.enabled, scopeMatches(rule.scope, frontmostBundleID: frontmostBundleID) else { return false }
                 guard case let .keyboard(trigger) = rule.trigger else { return false }
@@ -117,6 +125,17 @@ final class KeyboardEngine {
             suppressedKeyUps.insert(keyCode)
         }
         return true
+    }
+
+    private func currentModifiers(eventFlags: CGEventFlags) -> ModifierSet {
+        // Fn/Globe is reported as maskSecondaryFn. On some laptop keyboards the
+        // key-down event can arrive with incomplete modifier flags, while the source
+        // state / preceding flagsChanged event already knows Fn is held.
+        var raw = eventFlags.rawValue
+        raw |= CGEventSource.flagsState(.combinedSessionState).rawValue
+        raw |= CGEventSource.flagsState(.hidSystemState).rawValue
+        let sourceFlags = ModifierSet(rawValue: UInt64(raw)).intersection(.userRelevant)
+        return sourceFlags.union(liveModifierFlags)
     }
 
     private func scopeMatches(_ scope: RuleScope, frontmostBundleID: String?) -> Bool {

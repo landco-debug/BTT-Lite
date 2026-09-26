@@ -9,6 +9,15 @@ final class ActionRunner {
     // shortcuts from entering RuSwitcher's word-conversion buffer.
     static let syntheticEventTag: Int64 = 0x52555300
 
+    private struct RecentCloseTarget {
+        var processIdentifier: pid_t
+        var bundleIdentifier: String?
+        var bundleURL: URL?
+        var capturedAt: Date
+    }
+
+    private var recentCloseTarget: RecentCloseTarget?
+
     func execute(_ rule: Rule) {
         let actions = rule.actions.filter(\.enabled)
         Task { [weak self] in
@@ -126,10 +135,64 @@ final class ActionRunner {
             return
         }
         let modifiers = ModifierSet(rawValue: UInt64(action.parameters["modifiers"] ?? "") ?? 0)
+
+        // BetterTouchTool-style close/reopen workflows need to keep the application
+        // context even after ⌘W closes the last window (common with Chrome/Safari web apps).
+        if code == 13, modifiers == [.command] { // ⌘W
+            rememberCurrentApplicationAsCloseTarget()
+            sendKeyCode(code, modifiers: modifiers)
+            return
+        }
+        if code == 17, modifiers == [.shift, .command], restoreRecentCloseTargetIfAvailable() { // ⇧⌘T
+            return
+        }
+
         sendKeyCode(code, modifiers: modifiers)
     }
 
-    private func sendKeyCode(_ keyCode: UInt16, modifiers: ModifierSet) {
+    private func rememberCurrentApplicationAsCloseTarget() {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        recentCloseTarget = RecentCloseTarget(
+            processIdentifier: app.processIdentifier,
+            bundleIdentifier: app.bundleIdentifier,
+            bundleURL: app.bundleURL,
+            capturedAt: Date()
+        )
+    }
+
+    private func restoreRecentCloseTargetIfAvailable() -> Bool {
+        guard let target = recentCloseTarget,
+              Date().timeIntervalSince(target.capturedAt) <= 600 else {
+            recentCloseTarget = nil
+            return false
+        }
+
+        let running = NSWorkspace.shared.runningApplications.first { app in
+            if app.processIdentifier == target.processIdentifier { return true }
+            if let bundleIdentifier = target.bundleIdentifier {
+                return app.bundleIdentifier == bundleIdentifier
+            }
+            return false
+        }
+
+        if let running {
+            _ = running.activate(options: [.activateIgnoringOtherApps])
+            sendKeyCode(17, modifiers: [.shift, .command], targetPID: running.processIdentifier)
+            return true
+        }
+
+        // A standalone web app may terminate when its last window closes. In that
+        // case reopening its bundle is the closest equivalent to BTT's "restore it"
+        // behavior; sending ⇧⌘T to the newly frontmost unrelated app would be wrong.
+        if let bundleURL = target.bundleURL, NSWorkspace.shared.open(bundleURL) {
+            return true
+        }
+
+        return false
+    }
+
+    private func sendKeyCode(_ keyCode: UInt16, modifiers: ModifierSet, targetPID: pid_t? = nil) {
         // Mission Control and some global hotkey listeners ignore synthetic events
         // made from combinedSessionState. hidSystemState follows the hardware path.
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
@@ -151,24 +214,46 @@ final class ActionRunner {
             if let type { event.type = type }
             event.flags = flags
             event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
-            event.post(tap: .cghidEventTap)
+            if let targetPID {
+                event.postToPid(targetPID)
+            } else {
+                event.post(tap: .cghidEventTap)
+            }
         }
 
         var flags: CGEventFlags = []
         if modifiers.contains(.capsLock) { flags.insert(.maskAlphaShift) }
         if modifiers.contains(.function) { flags.insert(.maskSecondaryFn) }
+        if modifiers.contains(.control) { flags.insert(.maskControl) }
+        if modifiers.contains(.option) { flags.insert(.maskAlternate) }
+        if modifiers.contains(.shift) { flags.insert(.maskShift) }
+        if modifiers.contains(.command) { flags.insert(.maskCommand) }
 
-        for modifier in physical where modifiers.contains(modifier.member) {
-            flags.insert(modifier.flag)
-            post(modifier.keyCode, down: true, flags: flags, type: .flagsChanged)
+        if targetPID != nil {
+            // For a remembered application target, flags on the key event are enough
+            // and avoid leaking synthetic modifier transitions to the newly frontmost app.
+            post(CGKeyCode(keyCode), down: true, flags: flags)
+            post(CGKeyCode(keyCode), down: false, flags: flags)
+            return
         }
 
-        post(CGKeyCode(keyCode), down: true, flags: flags)
-        post(CGKeyCode(keyCode), down: false, flags: flags)
+        // Global/system shortcuts (including Mission Control) need explicit modifier
+        // transitions to behave like physical keyboard input.
+        var liveFlags: CGEventFlags = []
+        if modifiers.contains(.capsLock) { liveFlags.insert(.maskAlphaShift) }
+        if modifiers.contains(.function) { liveFlags.insert(.maskSecondaryFn) }
+
+        for modifier in physical where modifiers.contains(modifier.member) {
+            liveFlags.insert(modifier.flag)
+            post(modifier.keyCode, down: true, flags: liveFlags, type: .flagsChanged)
+        }
+
+        post(CGKeyCode(keyCode), down: true, flags: liveFlags)
+        post(CGKeyCode(keyCode), down: false, flags: liveFlags)
 
         for modifier in physical.reversed() where modifiers.contains(modifier.member) {
-            flags.remove(modifier.flag)
-            post(modifier.keyCode, down: false, flags: flags, type: .flagsChanged)
+            liveFlags.remove(modifier.flag)
+            post(modifier.keyCode, down: false, flags: liveFlags, type: .flagsChanged)
         }
     }
 
@@ -193,6 +278,9 @@ final class ActionRunner {
                 do {
                     try process.run()
                     process.waitUntilExit()
+                    if process.terminationStatus != 0 {
+                        NSLog("BTT Lite: process %@ exited with status %d", executable, process.terminationStatus)
+                    }
                 } catch {
                     NSLog("BTT Lite: process failed: %@", String(describing: error))
                 }
