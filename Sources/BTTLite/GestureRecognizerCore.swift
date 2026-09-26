@@ -18,12 +18,12 @@ struct RecognizedGesture: Equatable {
 /// It is intentionally independent of AppKit/private APIs so it can be unit tested.
 final class GestureRecognizerCore {
     struct Thresholds {
-        var swipeDistance: Double = 0.095
-        var swipeDominance: Double = 1.20
-        var maximumSwipeDuration: TimeInterval = 1.10
-        var tapMovement: Double = 0.045
-        var maximumTapDuration: TimeInterval = 0.28
-        var doubleTapInterval: TimeInterval = 0.38
+        var swipeDistance: Double = 0.070
+        var swipeDominance: Double = 1.15
+        var maximumSwipeDuration: TimeInterval = 1.20
+        var tapMovement: Double = 0.060
+        var maximumTapDuration: TimeInterval = 0.40
+        var doubleTapInterval: TimeInterval = 0.55
     }
 
     private struct TapMemory {
@@ -40,6 +40,7 @@ final class GestureRecognizerCore {
         var lastY: Double = 0
         var maxFingerCount = 0
         var maxDistance: Double = 0
+        var didEmitSwipe = false
         var lastTap: TapMemory?
     }
 
@@ -71,6 +72,12 @@ final class GestureRecognizerCore {
             state.active = false
             state.maxFingerCount = 0
             state.maxDistance = 0
+
+            if state.didEmitSwipe {
+                state.didEmitSwipe = false
+                return []
+            }
+            state.didEmitSwipe = false
 
             if duration <= thresholds.maximumSwipeDuration,
                max(absX, absY) >= thresholds.swipeDistance {
@@ -114,6 +121,7 @@ final class GestureRecognizerCore {
             state.lastY = centroid.y
             state.maxFingerCount = contacts.count
             state.maxDistance = 0
+            state.didEmitSwipe = false
             return []
         }
 
@@ -123,6 +131,33 @@ final class GestureRecognizerCore {
         let dx = centroid.x - state.startX
         let dy = centroid.y - state.startY
         state.maxDistance = max(state.maxDistance, hypot(dx, dy))
+
+        // Emit a swipe as soon as it is unambiguous instead of waiting for every
+        // finger to leave the surface. Magic Mouse can keep a lingering contact
+        // alive after the visible swipe, which previously made the action appear dead.
+        let duration = max(0, uptime - state.startUptime)
+        if !state.didEmitSwipe,
+           duration <= thresholds.maximumSwipeDuration,
+           max(abs(dx), abs(dy)) >= thresholds.swipeDistance {
+            let direction: GestureDirection?
+            if abs(dx) >= abs(dy) * thresholds.swipeDominance {
+                direction = dx < 0 ? .left : .right
+            } else if abs(dy) >= abs(dx) * thresholds.swipeDominance {
+                direction = dy < 0 ? .down : .up
+            } else {
+                direction = nil
+            }
+            if let direction {
+                state.didEmitSwipe = true
+                state.lastTap = nil
+                return [RecognizedGesture(
+                    device: device,
+                    fingers: max(1, state.maxFingerCount),
+                    kind: .swipe,
+                    direction: direction
+                )]
+            }
+        }
         return []
     }
 

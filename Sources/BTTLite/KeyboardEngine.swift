@@ -40,17 +40,17 @@ final class KeyboardEngine {
                 return Unmanaged.passUnretained(event)
             }
             let engine = Unmanaged<KeyboardEngine>.fromOpaque(userInfo).takeUnretainedValue()
-            MainActor.assumeIsolated {
+            let consumed = MainActor.assumeIsolated {
                 engine.handle(type: type, event: event)
             }
-            return Unmanaged.passUnretained(event)
+            return consumed ? nil : Unmanaged.passUnretained(event)
         }
 
         let info = Unmanaged.passUnretained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .listenOnly,
+            options: .defaultTap,
             eventsOfInterest: mask,
             callback: callback,
             userInfo: info
@@ -74,8 +74,8 @@ final class KeyboardEngine {
         eventTap = nil
     }
 
-    private func handle(type: CGEventType, event: CGEvent) {
-        guard let profile = store.activeProfile() else { return }
+    private func handle(type: CGEventType, event: CGEvent) -> Bool {
+        guard let profile = store.activeProfile() else { return false }
         let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 
         let matching: [Rule]
@@ -88,7 +88,7 @@ final class KeyboardEngine {
                 return trigger.keyCode == keyCode && trigger.modifiers == modifiers && trigger.triggerOnKeyDown
             }
         } else if type == Self.systemDefinedEventType {
-            guard let nsEvent = NSEvent(cgEvent: event) else { return }
+            guard let nsEvent = NSEvent(cgEvent: event) else { return false }
             let systemCode = Int((nsEvent.data1 & 0xFFFF0000) >> 16)
             matching = profile.rules.filter { rule in
                 guard rule.enabled, scopeMatches(rule.scope, frontmostBundleID: frontmostBundleID) else { return false }
@@ -96,10 +96,14 @@ final class KeyboardEngine {
                 return trigger.code == systemCode
             }
         } else {
-            return
+            return false
         }
 
+        guard !matching.isEmpty else { return false }
         for rule in matching { runner.execute(rule) }
+        // A configured hotkey belongs to BTT Lite. Swallow the original event so
+        // apps do not also act on it (e.g. ⌘L focusing Chrome's address bar).
+        return true
     }
 
     private func scopeMatches(_ scope: RuleScope, frontmostBundleID: String?) -> Bool {

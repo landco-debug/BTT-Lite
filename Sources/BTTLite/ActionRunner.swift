@@ -64,8 +64,10 @@ final class ActionRunner {
         case .launchpad:
             await runProcess("/usr/bin/open", arguments: ["-a", "Launchpad"])
         case .toggleBluetoothDevice:
-            if let address = action.parameters["address"], !address.isEmpty {
-                await runBundledHelper("BTTLiteBluetoothHelper", arguments: [address])
+            let address = action.parameters["address"] ?? ""
+            let name = action.parameters["deviceName"] ?? ""
+            if !address.isEmpty || !name.isEmpty {
+                await runBundledHelper("BTTLiteBluetoothHelper", arguments: [address, name])
             }
         case .activateHoveredDockApp:
             activateHoveredDockApp()
@@ -113,34 +115,57 @@ final class ActionRunner {
     }
 
     private func sendShortcut(_ action: RuleAction) {
-        let code = UInt16(action.parameters["keyCode"] ?? "") ?? 0
+        guard let rawCode = action.parameters["keyCode"],
+              let code = UInt16(rawCode) else {
+            // Never fall back to virtual key 0 ("A", or "Ф" on a Russian layout).
+            // A malformed/preserved action must be skipped instead of typing text.
+            NSLog("BTT Lite: skipped shortcut action without a valid key code: %@", action.title)
+            return
+        }
         let modifiers = ModifierSet(rawValue: UInt64(action.parameters["modifiers"] ?? "") ?? 0)
         sendKeyCode(code, modifiers: modifiers)
     }
 
     private func sendKeyCode(_ keyCode: UInt16, modifiers: ModifierSet) {
-        guard let source = CGEventSource(stateID: .combinedSessionState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false) else { return }
+        // Mission Control and some global hotkey listeners ignore synthetic events
+        // made from combinedSessionState. hidSystemState follows the hardware path.
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
 
-        let flags = cgFlags(from: modifiers)
-        down.flags = flags
-        up.flags = flags
-        down.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
-        up.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-    }
+        struct PhysicalModifier {
+            let member: ModifierSet
+            let keyCode: CGKeyCode
+            let flag: CGEventFlags
+        }
+        let physical: [PhysicalModifier] = [
+            PhysicalModifier(member: .control, keyCode: 59, flag: .maskControl),
+            PhysicalModifier(member: .option, keyCode: 58, flag: .maskAlternate),
+            PhysicalModifier(member: .shift, keyCode: 56, flag: .maskShift),
+            PhysicalModifier(member: .command, keyCode: 55, flag: .maskCommand)
+        ]
 
-    private func cgFlags(from modifiers: ModifierSet) -> CGEventFlags {
+        func post(_ code: CGKeyCode, down: Bool, flags: CGEventFlags) {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { return }
+            event.flags = flags
+            event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
+            event.post(tap: .cghidEventTap)
+        }
+
         var flags: CGEventFlags = []
         if modifiers.contains(.capsLock) { flags.insert(.maskAlphaShift) }
-        if modifiers.contains(.shift) { flags.insert(.maskShift) }
-        if modifiers.contains(.control) { flags.insert(.maskControl) }
-        if modifiers.contains(.option) { flags.insert(.maskAlternate) }
-        if modifiers.contains(.command) { flags.insert(.maskCommand) }
         if modifiers.contains(.function) { flags.insert(.maskSecondaryFn) }
-        return flags
+
+        for modifier in physical where modifiers.contains(modifier.member) {
+            flags.insert(modifier.flag)
+            post(modifier.keyCode, down: true, flags: flags)
+        }
+
+        post(CGKeyCode(keyCode), down: true, flags: flags)
+        post(CGKeyCode(keyCode), down: false, flags: flags)
+
+        for modifier in physical.reversed() where modifiers.contains(modifier.member) {
+            flags.remove(modifier.flag)
+            post(modifier.keyCode, down: false, flags: flags)
+        }
     }
 
     private func waitForClipboardChange(timeout: Double) async {

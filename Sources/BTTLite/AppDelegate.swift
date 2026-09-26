@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(withTitle: "Import BetterTouchTool Preset…", action: #selector(importBTTPreset), keyEquivalent: "i")
+        menu.addItem(withTitle: "Permissions Status…", action: #selector(showPermissions), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit BTT Lite", action: #selector(quit), keyEquivalent: "q")
         for item in menu.items { item.target = self }
@@ -67,6 +69,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             let alert = NSAlert(error: error)
             alert.runModal()
+        }
+    }
+
+    @objc private func showPermissions() {
+        let accessibility = AXIsProcessTrusted()
+        let inputMonitoring = CGPreflightListenEventAccess()
+
+        let alert = NSAlert()
+        alert.messageText = "BTT Lite Permissions"
+        alert.informativeText = """
+        Accessibility: \(accessibility ? "Granted" : "Not granted")
+        Input Monitoring: \(inputMonitoring ? "Granted" : "Not granted")
+
+        Accessibility is required for global hotkeys and synthetic actions.
+        Input Monitoring is required for Magic Mouse and trackpad touch data.
+        """
+        alert.addButton(withTitle: accessibility && inputMonitoring ? "OK" : "Request Again")
+        if !(accessibility && inputMonitoring) {
+            alert.addButton(withTitle: "Open Privacy Settings")
+            alert.addButton(withTitle: "Cancel")
+        }
+
+        let response = alert.runModal()
+        guard !(accessibility && inputMonitoring) else { return }
+
+        if response == .alertFirstButtonReturn {
+            _ = AXIsProcessTrustedWithOptions([
+                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+            ] as CFDictionary)
+            _ = CGRequestListenEventAccess()
+        } else if response == .alertSecondButtonReturn {
+            let pane = !accessibility ? "Privacy_Accessibility" : "Privacy_ListenEvent"
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 

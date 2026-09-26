@@ -182,3 +182,35 @@ Changes:
 Validation:
 - The failed C05 run confirmed the app compiled, signed, and the JavaScript helper actually executed the async transform successfully; only the test expectation was wrong.
 - A replacement CI run is triggered by this commit.
+
+
+## C06 — First on-device bug-fix pass
+
+Status: implemented from the first MacBook Air M1 / macOS Sequoia test report; CI validation pending at commit time.
+
+User-reported findings addressed:
+- Trackpad 3-finger click opened PasteNow but also typed a stray Russian “ф”.
+- Trackpad 3-finger double-tap did not execute the imported hide workflow.
+- ⌘L Translate&Replace did not work because Chrome also received ⌘L.
+- Fn+4 Bluetooth toggle did not work reliably.
+- Magic Mouse 3-finger left/right swipe did not switch Spaces.
+- Intermittent system alert sounds were heard while using configured triggers.
+- Settings window could remain behind Chrome.
+- User was unsure whether Accessibility/Input Monitoring permissions were both granted.
+
+Changes:
+- Keyboard triggers now use an intercepting event tap and consume a matched original key event instead of listen-only observation. This prevents the frontmost app from also executing the same hotkey; notably ⌘L no longer moves focus to Chrome's location field before the JavaScript selection transform copies the selection.
+- Synthetic keyboard actions now use a HID-system event source plus explicit modifier down/up events. This better follows the hardware path used by Mission Control/global hotkey listeners and is intended to fix Space switching, ⌘H and similar system/application shortcuts.
+- Removed the dangerous virtual-key-0 fallback. A malformed send-shortcut action is skipped and logged instead of typing “A” / Russian “Ф”.
+- Bluetooth helper now resolves paired devices by normalized MAC address and by device name, accepts colon/hyphen address forms, and verifies/retries disconnect/connect state changes.
+- Swipe recognizer now fires as soon as direction/distance are unambiguous rather than waiting for every contact to disappear. Thresholds were modestly relaxed for Magic Mouse, and double-tap timing/movement tolerances were made less brittle.
+- Settings window is floating and explicitly ordered front so it can be brought above Chrome from the menu-bar app.
+- Added a Permissions Status menu item showing Accessibility and Input Monitoring state and allowing a re-request/open of the relevant Privacy pane.
+
+Preset discrepancy found during diagnosis:
+- The supplied `Default.bttpreset` does NOT contain a Trackpad “3 Finger Swipe Down → ⌘W” rule. It contains the corresponding Magic Mouse rule, plus Trackpad 3 Finger Click, 3 Finger Double-Tap, 3 Finger Swipe Up, 2 Finger Swipe Left/Right and the now-unwanted 4 Finger Click. Therefore this one missing Trackpad rule cannot be recovered by an exact importer from that file; do not hard-code it into the importer. It should be added/duplicated in the editable GUI or imported from a newer preset that actually contains it.
+- The supplied Fn+4 rule contains a disabled “Run Shortcut: Imgur” action and an enabled “Toggle Bluetooth Device Connection” action for device name `Win`; the importer correctly preserves both enabled states.
+
+Next validation:
+- GitHub macOS 15 arm64 compile/sign/smoke workflow.
+- Then retest on the user's M1: Trackpad 3 Finger Click, 3 Finger Double-Tap, ⌘L Translate&Replace, Fn+4 Bluetooth, Magic Mouse 3 Finger Space swipes, system alert sounds and Settings window ordering.

@@ -50,6 +50,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             defer: false
         )
         window.title = "BTT Lite Settings"
+        // A menu-bar/accessory application otherwise can remain behind a regular
+        // application such as Chrome even after activation.
+        window.level = .floating
+        window.collectionBehavior.insert(.moveToActiveSpace)
         window.center()
         window.setFrameAutosaveName("BTTLite.Settings")
         super.init(window: window)
@@ -60,6 +64,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        window?.level = .floating
+        window?.makeKeyAndOrderFront(sender)
+        window?.orderFrontRegardless()
+    }
 
     private func buildUI() {
         guard let content = window?.contentView else { return }
