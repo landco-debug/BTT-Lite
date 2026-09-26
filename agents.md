@@ -597,3 +597,28 @@ Files added:
 
 Next commit:
 - TP02: add CI that builds the pinned upstream source without modifying it, compile the on-demand Dock helper, and package a ready-to-install pilot.
+
+
+## TP02 — Build the upstream pilot remotely and add the Dock helper
+
+Status: implemented; GitHub Actions validation is triggered by this commit.
+
+Changes:
+- Added a dedicated `Build Trickpad pilot` workflow on branch `trickpad-pilot`.
+- CI fetches exactly upstream Trickpad 0.14.0 commit `e16f7fcd1613b9df944957cbda0e69d8eaf19163`, runs upstream `scripts/check.sh`, and packages the resulting app without changing Trickpad source.
+- The user's Mac therefore needs neither Homebrew nor Xcode/Command Line Tools.
+- Added one Objective-C command-line helper for the only required BTT action Trickpad cannot express directly: 3-finger trackpad double-tap over a Dock item → activate that Dock item → send ⌘H.
+- The helper is short-lived, has no UI, no launch agent, no polling loop, and is installed as `~/bin/trickpad-hide-hovered-dock-app`.
+- Added `install.command`, which installs Trickpad to `~/Applications`, the helper to `~/bin`, and the pilot TOML to `~/.config/trickpad/config.toml`. An existing config is timestamp-backed up first.
+- The helper carries a stable ad-hoc designated identifier `local.trickpad.dockhelper` to make its Accessibility identity stable across rebuilds at the same path.
+- CI smoke-checks both signatures and the exact required TOML bindings before uploading `Trickpad-Pilot-0.14.0.zip`.
+
+Permissions:
+- Trickpad needs Accessibility for its keystroke bindings.
+- The short-lived Dock helper separately needs Accessibility because it uses the macOS Accessibility API to identify and press the Dock item under the pointer and then posts ⌘H.
+
+Still intentionally native:
+- Trackpad 2-finger swipe left/right remain macOS “Swipe between pages”; Trickpad 0.14.0 has no 2-finger trackpad swipe recognizer.
+
+Next:
+- Wait for this workflow to turn green. Do not hand the pilot to the user until the upstream checks, build, signatures, helper compile, and package smoke checks all pass.

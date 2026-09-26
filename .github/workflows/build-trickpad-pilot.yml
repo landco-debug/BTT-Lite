@@ -1,0 +1,94 @@
+name: Build Trickpad pilot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ trickpad-pilot ]
+    paths:
+      - "experiments/trickpad-pilot/**"
+      - ".github/workflows/build-trickpad-pilot.yml"
+      - "agents.md"
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          clang --version
+
+      - name: Fetch pinned upstream Trickpad 0.14.0
+        run: |
+          set -euo pipefail
+          git init upstream-trickpad
+          cd upstream-trickpad
+          git remote add origin https://github.com/nweii/trickpad.git
+          git fetch --depth 1 origin e16f7fcd1613b9df944957cbda0e69d8eaf19163
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "e16f7fcd1613b9df944957cbda0e69d8eaf19163"
+
+      - name: Run upstream checks and build without source changes
+        run: |
+          set -euo pipefail
+          cd upstream-trickpad
+          ./scripts/check.sh
+          /usr/bin/codesign --verify --deep --strict "build/Trickpad.app"
+
+      - name: Build short-lived Dock helper
+        run: |
+          set -euo pipefail
+          mkdir -p pilot/bin
+          /usr/bin/xcrun clang \
+            -O2 \
+            -mmacosx-version-min=15.0 \
+            -fobjc-arc \
+            -framework Cocoa \
+            -framework ApplicationServices \
+            experiments/trickpad-pilot/trickpad-hide-hovered-dock-app.m \
+            -o pilot/bin/trickpad-hide-hovered-dock-app
+
+          /usr/bin/codesign --force --sign - \
+            --identifier "local.trickpad.dockhelper" \
+            --requirements '=designated => identifier "local.trickpad.dockhelper"' \
+            pilot/bin/trickpad-hide-hovered-dock-app
+
+          /usr/bin/codesign --verify --strict pilot/bin/trickpad-hide-hovered-dock-app
+          /usr/bin/file pilot/bin/trickpad-hide-hovered-dock-app | /usr/bin/grep -q "arm64"
+
+      - name: Assemble pilot package
+        run: |
+          set -euo pipefail
+          /usr/bin/ditto upstream-trickpad/build/Trickpad.app pilot/Trickpad.app
+          /bin/cp experiments/trickpad-pilot/config.toml pilot/config.toml
+          /bin/cp experiments/trickpad-pilot/install.command pilot/install.command
+          /bin/chmod +x pilot/install.command
+          cat > pilot/BUILD.txt <<'EOF'
+          Trickpad pilot
+          Upstream: nweii/trickpad 0.14.0
+          Commit: e16f7fcd1613b9df944957cbda0e69d8eaf19163
+          Trickpad source is unmodified.
+          Custom component: one short-lived Dock helper for the BTT-compatible
+          "activate hovered Dock app, then Command-H" action.
+          EOF
+
+      - name: Smoke-check package
+        run: |
+          set -euo pipefail
+          /usr/bin/codesign --verify --deep --strict pilot/Trickpad.app
+          /usr/bin/codesign --verify --strict pilot/bin/trickpad-hide-hovered-dock-app
+          /usr/bin/grep -q 'three-finger-click = "cmd+shift+v"' pilot/config.toml
+          /usr/bin/grep -q 'three-finger-double-tap = "script:~/bin/trickpad-hide-hovered-dock-app"' pilot/config.toml
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0.zip
+          test -s Trickpad-Pilot-0.14.0.zip
+
+      - name: Upload pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: Trickpad-Pilot-0.14.0
+          path: Trickpad-Pilot-0.14.0.zip
+          if-no-files-found: error
+          retention-days: 7
