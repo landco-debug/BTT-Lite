@@ -35,6 +35,12 @@ jobs:
           test -x "$APP/Contents/Helpers/BTTLiteJavaScriptHelper"
           /usr/bin/codesign --verify --strict "$APP/Contents/Helpers/BTTLiteBluetoothHelper.app"
           /usr/libexec/PlistBuddy -c "Print :NSBluetoothAlwaysUsageDescription" "$APP/Contents/Helpers/BTTLiteBluetoothHelper.app/Contents/Info.plist" | /usr/bin/grep -q "Bluetooth"
+          set +e
+          "$APP/Contents/Helpers/BTTLiteBluetoothHelper.app/Contents/MacOS/BTTLiteBluetoothHelper" >/tmp/btt-bt-out 2>/tmp/btt-bt-err
+          BT_STATUS=$?
+          set -e
+          test "$BT_STATUS" -eq 64
+          /usr/bin/grep -q "Usage:" /tmp/btt-bt-err
           /usr/bin/codesign --verify --deep --strict "$APP"
           /usr/bin/file "$APP/Contents/MacOS/BTTLite" | /usr/bin/grep -q "arm64"
           /usr/libexec/PlistBuddy -c "Print :NSBluetoothAlwaysUsageDescription" "$APP/Contents/Info.plist" | /usr/bin/grep -q "Bluetooth"

@@ -354,3 +354,41 @@ Retest contract:
 2. With a text field focused, Fn+4 must NOT insert “4”.
 3. On the first actual Bluetooth attempt, macOS may ask for Bluetooth permission; allow it.
 4. If Bluetooth still cannot toggle, BTT Lite must now show a concrete “Bluetooth action failed” diagnostic instead of silently doing nothing.
+
+
+## C11 — Eliminate sticky Fn state, non-invasive shortcut injection, safer Bluetooth toggle
+
+Status: implemented after C10 on-device retest; macOS CI validation pending at commit time.
+
+On-device evidence:
+- C10 finally recognized Fn+4 and executed the Bluetooth action once.
+- After Input Monitoring was granted, plain number keys became unsafe: plain 4 could no longer be typed, and plain 1 could execute the configured Fn+1 action.
+- The Bluetooth reconnect attempt returned -536870186 / 0xE00002D6, which is kIOReturnTimeout.
+- The Linux Bluetooth receiver later needed its Bluetooth stack reset and showed an mpris-proxy crash. Causation is not proven, but C10's repeated state-changing openConnection/closeConnection retries were unnecessarily aggressive and are removed.
+- Magic Mouse 3-finger left/right did not switch Spaces; attempting it could activate the user's transcription app instead.
+
+Root causes:
+- C10 cached `fnIsDown`. On an Fn release, the flagsChanged event could arrive while `CGEventSource.keyState(.hidSystemState, key: 63)` still briefly reported down. The cached state then remained true indefinitely. Every later number key could therefore be matched as Fn+number. This exactly explains the plain 1/plain 4 failures.
+- C06/C10 synthetic shortcuts emitted separate fake modifier `flagsChanged` events (Control/Option/Shift/Command down/up). Modifier-key hotkey utilities can interpret those as genuine user modifier presses. A Magic Mouse Space action therefore had an avoidable path to trigger a transcription utility before/while Ctrl+Arrow was posted.
+- The C10 Bluetooth helper actively retried connect up to three times and disconnect up to ten times. After an I/O timeout this can stack additional state changes onto a controller/remote device that is already unresponsive.
+
+Changes:
+- Fn is no longer cached. For each main keyDown, BTT Lite samples the physical kVK_Function key state (keyCode 63) at that exact moment and also accepts maskSecondaryFn on that event. No later plain number press can inherit an old Fn state.
+- Keyboard tap no longer subscribes to the global flagsChanged stream. This reduces event traffic and removes the race that created sticky Fn.
+- Matched Fn+number chords still consume both keyDown and keyUp, so the digit is not delivered to Finder/text fields when Fn is genuinely held.
+- All synthetic shortcuts now post only the actual keyDown/keyUp with the desired modifier flags. Separate fake modifier transitions were removed. This applies to Mission Control Space switching, browser navigation, Cmd+W / Shift+Cmd+T, selection copy/paste, and every other Send Keyboard Shortcut path.
+- The event source remains hidSystemState and the RuSwitcher compatibility marker is preserved. localEventsSuppressionInterval is zeroed to avoid a mouse gesture suppressing the immediately generated system shortcut.
+- Magic Mouse 3-finger left/right therefore executes Ctrl+Arrow without manufacturing standalone Control-key presses that another hotkey app can consume. System Settings' “Swipe between full-screen applications” can remain OFF, matching the user's original BTT setup.
+- Bluetooth connect/disconnect now sends exactly one state-changing IOBluetooth request, then passively observes state for a bounded grace period. There are no automatic retries after timeout/busy/offline conditions.
+- Bluetooth errors are decoded to useful names (including I/O timeout) and explicitly say that no automatic retry was made.
+- Bluetooth helper now links IOKit directly for canonical IOReturn constants.
+- CI smoke launches the nested Bluetooth helper with no arguments and requires its expected usage exit, in addition to bundle/signature/privacy checks.
+
+Safety note:
+- The Linux mpris-proxy crash cannot be attributed conclusively to BTT Lite from the screenshot alone. However, removing repeated connect/disconnect requests is the safer controller/remote-device behavior after a timeout and eliminates one plausible stressor.
+
+Retest contract:
+1. Leave Input Monitoring enabled. Type 111144441234567890 repeatedly: plain digits must remain plain digits and must not invoke Fn actions.
+2. Hold Fn and press 1, then Fn+4: only the explicit Fn chords should fire; their digits must not leak to the frontmost app.
+3. For Bluetooth, test at most one disconnect and one reconnect. If reconnect times out again, stop there and report the C11 diagnostic; do not power-cycle repeatedly for the test.
+4. With Magic Mouse, 3-finger left/right should switch Spaces without activating Handy. The macOS Mouse setting for “Swipe between full-screen applications” may remain disabled.

@@ -12,7 +12,6 @@ final class KeyboardEngine {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var suppressedKeyUps: Set<UInt16> = []
-    private var fnIsDown = false
 
     init(store: ConfigStore, runner: ActionRunner) {
         self.store = store
@@ -37,7 +36,6 @@ final class KeyboardEngine {
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) |
                    CGEventMask(1 << CGEventType.keyUp.rawValue) |
-                   CGEventMask(1 << CGEventType.flagsChanged.rawValue) |
                    CGEventMask(1 << Self.systemDefinedEventType.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -107,17 +105,11 @@ final class KeyboardEngine {
         runLoopSource = nil
         eventTap = nil
         suppressedKeyUps.removeAll(keepingCapacity: true)
-        fnIsDown = false
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Bool {
         let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         if frontmostBundleID == Bundle.main.bundleIdentifier { return false }
-
-        if type == .flagsChanged {
-            updateFnState(from: event)
-            return false
-        }
 
         if type == .keyUp {
             let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
@@ -168,29 +160,22 @@ final class KeyboardEngine {
         return true
     }
 
-    private func updateFnState(from event: CGEvent) {
-        let rawKeyCode = event.getIntegerValueField(.keyboardEventKeycode)
-
-        // On Apple keyboards Fn/Globe normally arrives as flagsChanged keyCode 63.
-        // A few OS/hardware combinations report -1; in that case the Fn flag and
-        // HID hardware state still let us reconstruct the edge.
-        guard rawKeyCode == Int64(Self.fnKeyCode) || rawKeyCode == -1 else { return }
-
-        let flagSaysDown = event.flags.contains(.maskSecondaryFn)
-        let hardwareSaysDown = CGEventSource.keyState(.hidSystemState, key: Self.fnKeyCode)
-        fnIsDown = flagSaysDown || hardwareSaysDown
-    }
-
     private func currentModifiers(eventFlags: CGEventFlags) -> ModifierSet {
         var modifiers = ModifierSet(rawValue: UInt64(eventFlags.rawValue))
             .intersection(.userRelevant)
 
-        // Do not rely only on the keyDown event's flags. On MacBook keyboards the
-        // number-key event can be delivered without maskSecondaryFn even while the
-        // physical Fn/Globe key is still held.
-        let hardwareFn = CGEventSource.keyState(.hidSystemState, key: Self.fnKeyCode)
-        if fnIsDown || hardwareFn {
+        // Fn is deliberately NOT cached across events. C10 showed why: the Fn-release
+        // flagsChanged callback can race the HID state and leave a cached "down" bit
+        // stuck, turning later plain 1/2/3/4 presses into Fn+number hotkeys.
+        //
+        // Sample the physical kVK_Function (63) state exactly when the main key-down
+        // arrives. If the event itself already carries maskSecondaryFn that is accepted
+        // too. Releasing Fn therefore cannot poison any later number key.
+        if eventFlags.contains(.maskSecondaryFn) ||
+           CGEventSource.keyState(.hidSystemState, key: Self.fnKeyCode) {
             modifiers.insert(.function)
+        } else {
+            modifiers.remove(.function)
         }
         return modifiers
     }

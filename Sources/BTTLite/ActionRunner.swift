@@ -193,33 +193,14 @@ final class ActionRunner {
     }
 
     private func sendKeyCode(_ keyCode: UInt16, modifiers: ModifierSet, targetPID: pid_t? = nil) {
-        // Mission Control and some global hotkey listeners ignore synthetic events
-        // made from combinedSessionState. hidSystemState follows the hardware path.
+        // A HID-state source plus flags on the actual key event is enough for ordinary
+        // AppKit shortcuts and for Mission Control's Ctrl+←/→ on macOS Sequoia.
+        //
+        // Do NOT synthesize separate modifier flagsChanged events. Modifier-only hotkey
+        // tools (dictation utilities in particular) can interpret those fake Control /
+        // Option / Command edges as real user presses and launch unexpectedly.
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
-
-        struct PhysicalModifier {
-            let member: ModifierSet
-            let keyCode: CGKeyCode
-            let flag: CGEventFlags
-        }
-        let physical: [PhysicalModifier] = [
-            PhysicalModifier(member: .control, keyCode: 59, flag: .maskControl),
-            PhysicalModifier(member: .option, keyCode: 58, flag: .maskAlternate),
-            PhysicalModifier(member: .shift, keyCode: 56, flag: .maskShift),
-            PhysicalModifier(member: .command, keyCode: 55, flag: .maskCommand)
-        ]
-
-        func post(_ code: CGKeyCode, down: Bool, flags: CGEventFlags, type: CGEventType? = nil) {
-            guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { return }
-            if let type { event.type = type }
-            event.flags = flags
-            event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
-            if let targetPID {
-                event.postToPid(targetPID)
-            } else {
-                event.post(tap: .cghidEventTap)
-            }
-        }
+        source.localEventsSuppressionInterval = 0
 
         var flags: CGEventFlags = []
         if modifiers.contains(.capsLock) { flags.insert(.maskAlphaShift) }
@@ -229,32 +210,23 @@ final class ActionRunner {
         if modifiers.contains(.shift) { flags.insert(.maskShift) }
         if modifiers.contains(.command) { flags.insert(.maskCommand) }
 
-        if targetPID != nil {
-            // For a remembered application target, flags on the key event are enough
-            // and avoid leaking synthetic modifier transitions to the newly frontmost app.
-            post(CGKeyCode(keyCode), down: true, flags: flags)
-            post(CGKeyCode(keyCode), down: false, flags: flags)
-            return
+        func post(_ down: Bool) {
+            guard let event = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: CGKeyCode(keyCode),
+                keyDown: down
+            ) else { return }
+            event.flags = flags
+            event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
+            if let targetPID {
+                event.postToPid(targetPID)
+            } else {
+                event.post(tap: .cghidEventTap)
+            }
         }
 
-        // Global/system shortcuts (including Mission Control) need explicit modifier
-        // transitions to behave like physical keyboard input.
-        var liveFlags: CGEventFlags = []
-        if modifiers.contains(.capsLock) { liveFlags.insert(.maskAlphaShift) }
-        if modifiers.contains(.function) { liveFlags.insert(.maskSecondaryFn) }
-
-        for modifier in physical where modifiers.contains(modifier.member) {
-            liveFlags.insert(modifier.flag)
-            post(modifier.keyCode, down: true, flags: liveFlags, type: .flagsChanged)
-        }
-
-        post(CGKeyCode(keyCode), down: true, flags: liveFlags)
-        post(CGKeyCode(keyCode), down: false, flags: liveFlags)
-
-        for modifier in physical.reversed() where modifiers.contains(modifier.member) {
-            liveFlags.remove(modifier.flag)
-            post(modifier.keyCode, down: false, flags: liveFlags, type: .flagsChanged)
-        }
+        post(true)
+        post(false)
     }
 
     private func waitForClipboardChange(timeout: Double) async {

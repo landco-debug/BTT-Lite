@@ -1,5 +1,6 @@
 import Foundation
 import IOBluetooth
+import IOKit
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
@@ -17,6 +18,28 @@ func normalizedAddress(_ value: String) -> String {
         .map(String.init)
         .joined()
         .lowercased()
+}
+
+func ioReturnDescription(_ status: IOReturn) -> String {
+    switch status {
+    case kIOReturnSuccess: return "success"
+    case kIOReturnBusy: return "device busy"
+    case kIOReturnTimeout: return "I/O timeout"
+    case kIOReturnOffline: return "device offline"
+    case kIOReturnNotReady: return "device not ready"
+    case kIOReturnNotAttached: return "device not attached"
+    case kIOReturnNotPermitted: return "operation not permitted"
+    default: return "IOReturn \(status)"
+    }
+}
+
+func waitUntil(_ predicate: () -> Bool, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if predicate() { return true }
+        Thread.sleep(forTimeInterval: 0.10)
+    } while Date() < deadline
+    return predicate()
 }
 
 let wanted = normalizedAddress(requestedAddress)
@@ -43,33 +66,30 @@ guard device.isPaired() else {
 }
 
 if device.isConnected() {
-    // A single closeConnection can report success before every profile/transport
-    // has fully dropped. Mirror mature CLI tools and retry for a few seconds.
-    for _ in 0..<10 {
-        let status = device.closeConnection()
-        if !device.isConnected() {
-            print("disconnected")
-            exit(0)
-        }
-        if status != kIOReturnSuccess {
-            fputs("Bluetooth disconnect failed: \(status)\n", stderr)
-            exit(3)
-        }
-        Thread.sleep(forTimeInterval: 0.50)
+    let status = device.closeConnection()
+    if !device.isConnected() || waitUntil({ !device.isConnected() }, timeout: 2.5) {
+        print("disconnected")
+        exit(0)
     }
-    exit(device.isConnected() ? 3 : 0)
+
+    fputs(
+        "Bluetooth disconnect failed: \(ioReturnDescription(status)) (\(status)). " +
+        "No automatic retry was made.\n",
+        stderr
+    )
+    exit(3)
 } else {
-    // openConnection() is synchronous for IOBluetoothDevice, but sleeping devices
-    // can need more than one page attempt on current macOS hardware.
-    var lastStatus: IOReturn = kIOReturnSuccess
-    for _ in 0..<3 {
-        lastStatus = device.openConnection()
-        if device.isConnected() {
-            print("connected")
-            exit(0)
-        }
-        Thread.sleep(forTimeInterval: 0.75)
+    let status = device.openConnection()
+
+    if device.isConnected() || waitUntil({ device.isConnected() }, timeout: 2.0) {
+        print("connected")
+        exit(0)
     }
-    fputs("Bluetooth connect failed: \(lastStatus)\n", stderr)
+
+    fputs(
+        "Bluetooth connect failed: \(ioReturnDescription(status)) (\(status)). " +
+        "No automatic retry was made.\n",
+        stderr
+    )
     exit(3)
 }
