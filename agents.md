@@ -168,3 +168,17 @@ Release/testing policy:
 
 Next step after green CI:
 - Hand the inner ZIP to the user for real-device testing on the MacBook Air M1: import the supplied BTT preset, grant Accessibility/Input Monitoring, test keyboard + Magic Mouse + trackpad rules, then measure idle RSS/CPU before adding more optional features.
+
+
+## C05.1 — Correct JavaScript-helper smoke assertion
+
+Status: applied from the first C05 smoke run.
+
+Changes:
+- The helper itself passed and returned `{"ok":true,"result":"HELLO"}`.
+- JSONEncoder correctly omits optional fields whose value is `nil`, so the original smoke assertion was too strict by requiring an explicit `"error": null`.
+- CI now validates the semantic contract instead: `ok == true`, `result == "HELLO"`, and no non-empty error.
+
+Validation:
+- The failed C05 run confirmed the app compiled, signed, and the JavaScript helper actually executed the async transform successfully; only the test expectation was wrong.
+- A replacement CI run is triggered by this commit.

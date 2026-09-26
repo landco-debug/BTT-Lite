@@ -31,7 +31,9 @@ jobs:
           import json
           with open("/tmp/btt-js-smoke.json", "r", encoding="utf-8") as f:
               value = json.load(f)
-          assert value == {"ok": True, "result": "HELLO", "error": None}, value
+          assert value.get("ok") is True, value
+          assert value.get("result") == "HELLO", value
+          assert not value.get("error"), value
           PY
           test -s dist/BTT-Lite-arm64.zip
       - name: Upload application
