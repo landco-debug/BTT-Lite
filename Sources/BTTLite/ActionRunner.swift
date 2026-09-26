@@ -137,19 +137,20 @@ final class ActionRunner {
             return
         }
         let modifiers = ModifierSet(rawValue: UInt64(action.parameters["modifiers"] ?? "") ?? 0)
+        let modifierSides = ModifierSideSet(rawValue: UInt64(action.parameters["modifierSides"] ?? "") ?? 0)
 
         // BetterTouchTool-style close/reopen workflows need to keep the application
         // context even after ⌘W closes the last window (common with Chrome/Safari web apps).
         if code == 13, modifiers == [.command] { // ⌘W
             rememberCurrentApplicationAsCloseTarget()
-            sendKeyCode(code, modifiers: modifiers)
+            sendKeyCode(code, modifiers: modifiers, modifierSides: modifierSides)
             return
         }
         if code == 17, modifiers == [.shift, .command], restoreRecentCloseTargetIfAvailable() { // ⇧⌘T
             return
         }
 
-        sendKeyCode(code, modifiers: modifiers)
+        sendKeyCode(code, modifiers: modifiers, modifierSides: modifierSides)
     }
 
     private func rememberCurrentApplicationAsCloseTarget() {
@@ -210,6 +211,7 @@ final class ActionRunner {
     private func sendKeyCode(
         _ keyCode: UInt16,
         modifiers: ModifierSet,
+        modifierSides: ModifierSideSet = [],
         targetPID: pid_t? = nil,
         holdDuration: TimeInterval = 0
     ) {
@@ -231,6 +233,9 @@ final class ActionRunner {
         if modifiers.contains(.command) { flags.insert(.maskCommand) }
         if modifiers.contains(.numericPad) { flags.insert(.maskNumericPad) }
         if modifiers.contains(.help) { flags.insert(.maskHelp) }
+        // Device-dependent flags preserve left/right identity without generating
+        // standalone synthetic modifier transitions (important for Handy/RuSwitcher).
+        flags.formUnion(CGEventFlags(rawValue: modifierSides.rawValue))
 
         func post(_ down: Bool) {
             guard let event = CGEvent(

@@ -9,12 +9,18 @@ import Foundation
 /// state, which prevents a released Fn key from becoming "sticky".
 struct KeyboardModifierState {
     private(set) var fnIsDown = false
+    private(set) var modifierSides: ModifierSideSet = []
 
     mutating func reset() {
         fnIsDown = false
+        modifierSides = []
     }
 
     mutating func observeFlagsChanged(keyCode: Int64, eventFlags: CGEventFlags) {
+        // Device-dependent NX bits are the canonical left/right modifier identity
+        // and are the same low bits BetterTouchTool stores in its advanced mask.
+        modifierSides = ModifierSideSet(rawValue: UInt64(eventFlags.rawValue)).intersection(.all)
+
         if eventFlags.contains(.maskSecondaryFn) {
             fnIsDown = true
             return
@@ -37,5 +43,10 @@ struct KeyboardModifierState {
             result.remove(.function)
         }
         return result
+    }
+
+    func effectiveModifierSides(eventFlags: CGEventFlags) -> ModifierSideSet {
+        let eventSides = ModifierSideSet(rawValue: UInt64(eventFlags.rawValue)).intersection(.all)
+        return eventSides.union(modifierSides)
     }
 }

@@ -53,18 +53,34 @@ struct BTTImporter {
             let keyCode = UInt16(clamping: intValue(raw["BTTShortcutKeyCode"]))
             let display = raw["BTTLayoutIndependentChar"] as? String ?? "Key \(keyCode)"
             let modifiers = ModifierSet(rawValue: UInt64(max(0, intValue(raw["BTTShortcutModifierKeys"]))))
+                .intersection(.userRelevant)
+            let advanced = UInt64(max(0, intValue(raw["BTTShortcutAdvancedModifierKeys"])))
+            let sides = ModifierSideSet(rawValue: advanced).intersection(.all)
+            let differentiate = leftRightDifferentiationEnabled(raw)
             return .keyboard(KeyboardTrigger(
                 keyCode: keyCode,
                 displayKey: normalizedDisplayKey(display),
-                modifiers: modifiers.intersection(.userRelevant),
-                triggerOnKeyDown: boolValue(raw["BTTTriggerOnDown"], default: true)
+                modifiers: modifiers,
+                triggerOnKeyDown: boolValue(raw["BTTTriggerOnDown"], default: true),
+                modifierSides: differentiate ? sides : nil,
+                differentiateModifierSides: differentiate
             ))
         }
 
         if triggerClass == "BTTTriggerTypeMagicMouse" || triggerClass == "BTTTriggerTypeTouchpadAll" {
             let description = raw["BTTTriggerTypeDescriptionReadOnly"] as? String ?? "Gesture"
             let device: GestureDevice = triggerClass == "BTTTriggerTypeMagicMouse" ? .magicMouse : .trackpad
-            return .gesture(parseGesture(description: description, device: device))
+            var gesture = parseGesture(description: description, device: device)
+            let requiredRaw = UInt64(max(0, intValue(raw["BTTRequiredModifierKeys"])))
+            if requiredRaw != 0 {
+                gesture.modifiers = ModifierSet(rawValue: requiredRaw).intersection(.userRelevant)
+            }
+            let advancedRaw = UInt64(max(0, intValue(raw["BTTAdditionalConfiguration"])))
+            let gestureSides = ModifierSideSet(rawValue: advancedRaw).intersection(.all)
+            let differentiate = leftRightDifferentiationEnabled(raw)
+            gesture.modifierSides = differentiate ? gestureSides : nil
+            gesture.differentiateModifierSides = differentiate
+            return .gesture(gesture)
         }
 
         return .unsupported(
@@ -102,6 +118,9 @@ struct BTTImporter {
             let parsed = parseBTTShortcut(shortcut)
             parameters["keyCode"] = String(parsed.keyCode)
             parameters["modifiers"] = String(parsed.modifiers.rawValue)
+            if !parsed.modifierSides.isEmpty {
+                parameters["modifierSides"] = String(parsed.modifierSides.rawValue)
+            }
             if let char = raw["BTTLayoutIndependentActionChar"] as? String { parameters["displayKey"] = normalizedDisplayKey(char) }
         } else if let command = raw["BTTTerminalCommand"] as? String {
             kind = .terminalCommand
@@ -159,21 +178,31 @@ struct BTTImporter {
         return RuleAction(enabled: enabled, kind: kind, title: title, parameters: parameters, sourceMetadata: metadata)
     }
 
-    private func parseBTTShortcut(_ value: String) -> (keyCode: UInt16, modifiers: ModifierSet) {
+    private func parseBTTShortcut(_ value: String) -> (keyCode: UInt16, modifiers: ModifierSet, modifierSides: ModifierSideSet) {
         let codes = value.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
-        guard let final = codes.last else { return (0, []) }
+        guard let final = codes.last else { return (0, [], []) }
         var modifiers: ModifierSet = []
+        var sides: ModifierSideSet = []
         for code in codes.dropLast() {
             switch code {
-            case 55: modifiers.insert(.command)
-            case 56: modifiers.insert(.shift)
-            case 58: modifiers.insert(.option)
-            case 59: modifiers.insert(.control)
+            case 55: modifiers.insert(.command); sides.insert(.leftCommand)
+            case 54: modifiers.insert(.command); sides.insert(.rightCommand)
+            case 56: modifiers.insert(.shift); sides.insert(.leftShift)
+            case 60: modifiers.insert(.shift); sides.insert(.rightShift)
+            case 58: modifiers.insert(.option); sides.insert(.leftOption)
+            case 61: modifiers.insert(.option); sides.insert(.rightOption)
+            case 59: modifiers.insert(.control); sides.insert(.leftControl)
+            case 62: modifiers.insert(.control); sides.insert(.rightControl)
             case 63: modifiers.insert(.function)
             default: break
             }
         }
-        return (UInt16(clamping: final), modifiers)
+        return (UInt16(clamping: final), modifiers, sides)
+    }
+
+    private func leftRightDifferentiationEnabled(_ raw: [String: Any]) -> Bool {
+        guard let config = raw["BTTTriggerConfig"] as? [String: Any] else { return false }
+        return boolValue(config["BTTLeftRightModifierDifferentiation"], default: false)
     }
 
     private func nestedString(_ raw: [String: Any], path: [String]) -> String {

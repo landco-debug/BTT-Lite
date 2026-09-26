@@ -13,6 +13,8 @@ struct InputSemanticsRegression {
     static func main() {
         testFnPressReleaseIsNotSticky()
         testEventFnBitWorksWithoutPriorTransition()
+        testLeftRightModifierTracking()
+        testModifierSideMaskMatchesNXLayout()
         testMissionControlSymbolicHotKeyParsing()
         print("InputSemanticsRegression: OK")
     }
@@ -33,6 +35,38 @@ struct InputSemanticsRegression {
         let state = KeyboardModifierState()
         assert(state.effectiveModifiers(eventFlags: [.maskSecondaryFn]).contains(.function),
                "Fn bit on the key event itself must be accepted")
+    }
+
+    static func testLeftRightModifierTracking() {
+        var state = KeyboardModifierState()
+        let leftCommandFlags = CGEventFlags(rawValue: ModifierSet.command.rawValue | ModifierSideSet.leftCommand.rawValue)
+        state.observeFlagsChanged(keyCode: 55, eventFlags: leftCommandFlags)
+        assert(state.effectiveModifierSides(eventFlags: []).contains(.leftCommand),
+               "left Command side was not tracked")
+        assert(!state.effectiveModifierSides(eventFlags: []).contains(.rightCommand),
+               "left Command was confused with right Command")
+
+        let rightCommandFlags = CGEventFlags(rawValue: ModifierSet.command.rawValue | ModifierSideSet.rightCommand.rawValue)
+        state.observeFlagsChanged(keyCode: 54, eventFlags: rightCommandFlags)
+        assert(state.effectiveModifierSides(eventFlags: []).contains(.rightCommand),
+               "right Command side was not tracked")
+        assert(!state.effectiveModifierSides(eventFlags: []).contains(.leftCommand),
+               "right Command was confused with left Command")
+
+        state.observeFlagsChanged(keyCode: 54, eventFlags: [])
+        assert(state.effectiveModifierSides(eventFlags: []).isEmpty,
+               "modifier side remained stuck after release")
+    }
+
+    static func testModifierSideMaskMatchesNXLayout() {
+        assert(ModifierSideSet.leftControl.rawValue == 0x0001, "left Control NX mask changed")
+        assert(ModifierSideSet.leftShift.rawValue == 0x0002, "left Shift NX mask changed")
+        assert(ModifierSideSet.rightShift.rawValue == 0x0004, "right Shift NX mask changed")
+        assert(ModifierSideSet.leftCommand.rawValue == 0x0008, "left Command NX mask changed")
+        assert(ModifierSideSet.rightCommand.rawValue == 0x0010, "right Command NX mask changed")
+        assert(ModifierSideSet.leftOption.rawValue == 0x0020, "left Option NX mask changed")
+        assert(ModifierSideSet.rightOption.rawValue == 0x0040, "right Option NX mask changed")
+        assert(ModifierSideSet.rightControl.rawValue == 0x2000, "right Control NX mask changed")
     }
 
     static func testMissionControlSymbolicHotKeyParsing() {

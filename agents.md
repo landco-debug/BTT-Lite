@@ -487,3 +487,48 @@ Retest contract:
 2. Trackpad: quick sanity test of existing three-finger directions; its C08 thresholds were not changed.
 3. Bluetooth: disconnect once with Fn+4, then reconnect once. If reconnect still fails, report the exact C13 error/status rather than repeatedly retrying.
 4. Fn+1..Fn+6 and ordinary digits should behave exactly as in C12; C13 does not alter Fn recognition.
+
+
+## C14 — Left/right modifier fidelity and modifier-guarded gestures
+
+Status: implemented after the user intentionally skipped installing C13; macOS CI validation pending at commit time.
+
+User decisions / requirements:
+- For Magic Mouse, the user is moving back toward Apple's native gesture layout: two-finger horizontal swipes for Spaces and one-finger horizontal swipes for page back/forward.
+- The user may repurpose two-finger vertical Magic Mouse swipes for close/restore actions, but only while a chosen keyboard modifier is held.
+- The user reported that BTT Lite did not distinguish left and right modifier keys even though their BTT configuration assigns different actions to left/right variants.
+- C14 must install over the currently used C12 without resetting the user's edited BTT Lite profile.
+
+Apple/BTT behavior verified:
+- Apple documents Magic Mouse one-finger horizontal swipe as page navigation, two-finger horizontal swipe as full-screen app/Space navigation, one-finger vertical movement as scrolling, and two-finger double-tap as Mission Control. Apple does not reserve a two-finger vertical *swipe* on Magic Mouse as a standard navigation gesture.
+- Apple HIG recommends preserving familiar standard gestures and responding consistently. Therefore C14 treats a custom two-finger vertical swipe as safe only as an explicit user-defined gesture; using a modifier as a required guard further avoids accidental overlap.
+- BetterTouchTool documents `BTTRequiredModifierKeys` for mouse/trackpad gestures and explicitly supports "trigger only if specific modifier keys are pressed". BTT also documents optional left/right modifier differentiation for keyboard shortcuts.
+- BTT's advanced modifier mask uses the macOS device-dependent NX modifier bits. These are: left Ctrl 0x1, left Shift 0x2, right Shift 0x4, left Cmd 0x8, right Cmd 0x10, left Option 0x20, right Option 0x40, right Ctrl 0x2000. This matches the user's preset: e.g. Cmd+L advanced value 1048592 carries right Cmd (0x10), while another Cmd shortcut with 1048584 carries left Cmd (0x8).
+
+Compatibility:
+- New model fields are Optional so C00-C13 `config.json` files decode without migration or reset.
+- Replacing C12 with C14 does not modify `~/Library/Application Support/BTT Lite/config.json`; all user edits made in C12 remain in place.
+- C13's runtime fixes are included because C14 is based on C13, but no gesture rule is re-enabled or rewritten automatically.
+
+Left/right modifier changes:
+- Added `ModifierSideSet` using the canonical macOS/NX device-dependent modifier bits.
+- KeyboardModifierState now tracks side-specific modifier state from flagsChanged while retaining the C12 Fn anti-sticky state machine.
+- Keyboard trigger matching honors side identity only when `differentiateModifierSides` is enabled. Without that option, left/right remain interchangeable exactly as before.
+- BTT importer reads `BTTShortcutAdvancedModifierKeys` plus `BTTLeftRightModifierDifferentiation`, preserving left/right Command, Option, Shift and Control from imported presets.
+- BTT shortcut actions now preserve physical modifier key codes too: left/right Cmd (55/54), Shift (56/60), Option (58/61), Control (59/62).
+- Synthetic shortcut actions can carry the side-specific device bits on the key event without generating standalone fake modifier transitions.
+- Settings exposes "Distinguish left/right modifiers" for keyboard triggers. Recording a shortcut captures the actual side used and shows L/R in the displayed shortcut.
+- Added CI regression coverage for left/right modifier state and the exact NX bit layout.
+
+Modifier-guarded gesture changes:
+- GestureTrigger now supports required modifiers, optional left/right side requirements, and left/right differentiation.
+- Gesture matching treats modifiers as a guard: if no modifiers are configured, existing gestures behave exactly as before; if modifiers are configured, they must be physically held when the gesture is recognized.
+- Settings exposes a "Capture Held Modifiers" control for Magic Mouse/Trackpad triggers. Hold the desired modifier(s), click the control, then configure e.g. Fingers=2 / Swipe / Up or Down.
+- The same left/right differentiation checkbox can be enabled for gesture modifiers.
+- BTT importer reads `BTTRequiredModifierKeys` and side information for modifier-guarded gestures.
+- Added importer regression tests for right Cmd vs left Cmd, side-specific shortcut actions, and a left-Option-guarded two-finger Magic Mouse swipe.
+
+Recommended Magic Mouse layout for the user's new plan:
+- macOS: 2-finger left/right = Spaces; 1-finger left/right = page back/forward.
+- BTT Lite: old 3-finger left/right Space rules disabled; old 2-finger horizontal page rules disabled.
+- Optional custom close/restore: 2-finger Up/Down plus a chosen modifier guard. Do not configure bare 2-finger vertical swipe if accidental activation while manipulating the mouse would be undesirable.

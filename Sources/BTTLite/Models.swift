@@ -121,6 +121,9 @@ struct KeyboardTrigger: Codable, Equatable {
     var displayKey: String
     var modifiers: ModifierSet
     var triggerOnKeyDown: Bool = true
+    /// Optional for backward-compatible decoding of C00-C13 config.json.
+    var modifierSides: ModifierSideSet? = nil
+    var differentiateModifierSides: Bool? = nil
 }
 
 struct SystemKeyTrigger: Codable, Equatable {
@@ -143,11 +146,37 @@ struct ModifierSet: Codable, OptionSet, Hashable {
     static let userRelevant: ModifierSet = [.capsLock, .shift, .control, .option, .command, .function]
 }
 
+/// Device-dependent modifier bits used by macOS/NXEvent and by BTT's
+/// BTTShortcutAdvancedModifierKeys when left/right differentiation is enabled.
+struct ModifierSideSet: Codable, OptionSet, Hashable {
+    let rawValue: UInt64
+
+    static let leftControl  = ModifierSideSet(rawValue: 0x00000001)
+    static let leftShift    = ModifierSideSet(rawValue: 0x00000002)
+    static let rightShift   = ModifierSideSet(rawValue: 0x00000004)
+    static let leftCommand  = ModifierSideSet(rawValue: 0x00000008)
+    static let rightCommand = ModifierSideSet(rawValue: 0x00000010)
+    static let leftOption   = ModifierSideSet(rawValue: 0x00000020)
+    static let rightOption  = ModifierSideSet(rawValue: 0x00000040)
+    static let rightControl = ModifierSideSet(rawValue: 0x00002000)
+
+    static let all: ModifierSideSet = [
+        .leftControl, .rightControl,
+        .leftShift, .rightShift,
+        .leftOption, .rightOption,
+        .leftCommand, .rightCommand
+    ]
+}
+
 struct GestureTrigger: Codable, Equatable {
     var device: GestureDevice
     var fingers: Int
     var gesture: GestureKind
     var direction: GestureDirection?
+    /// Required modifiers. nil/empty means no modifier guard.
+    var modifiers: ModifierSet? = nil
+    var modifierSides: ModifierSideSet? = nil
+    var differentiateModifierSides: Bool? = nil
 }
 
 enum GestureDevice: String, Codable, CaseIterable { case magicMouse, trackpad }
@@ -213,10 +242,17 @@ extension Trigger {
     var displayName: String {
         switch self {
         case let .keyboard(k):
-            return k.modifiers.symbols + k.displayKey
+            let prefix = k.differentiateModifierSides == true
+                ? (k.modifierSides ?? []).symbols(generic: k.modifiers)
+                : k.modifiers.symbols
+            return prefix + k.displayKey
         case let .gesture(g):
             let device = g.device == .magicMouse ? "Magic Mouse" : "Trackpad"
-            let base = "\(g.fingers) Finger \(g.gesture.displayName)"
+            let generic = g.modifiers ?? []
+            let modifierPrefix = g.differentiateModifierSides == true
+                ? (g.modifierSides ?? []).symbols(generic: generic)
+                : generic.symbols
+            let base = "\(modifierPrefix)\(g.fingers) Finger \(g.gesture.displayName)"
             if let direction = g.direction { return "\(device): \(base) \(direction.rawValue.capitalized)" }
             return "\(device): \(base)"
         case let .systemKey(k):
@@ -244,6 +280,23 @@ extension ModifierSet {
         if contains(.command) { s += "⌘" }
         if contains(.function) { s += "fn " }
         if contains(.capsLock) { s += "⇪" }
+        return s
+    }
+}
+
+extension ModifierSideSet {
+    func symbols(generic: ModifierSet) -> String {
+        var s = ""
+        func appendPair(_ left: ModifierSideSet, _ right: ModifierSideSet, symbol: String) {
+            if contains(left) { s += "L" + symbol }
+            if contains(right) { s += "R" + symbol }
+        }
+        appendPair(.leftControl, .rightControl, symbol: "⌃")
+        appendPair(.leftOption, .rightOption, symbol: "⌥")
+        appendPair(.leftShift, .rightShift, symbol: "⇧")
+        appendPair(.leftCommand, .rightCommand, symbol: "⌘")
+        if generic.contains(.function) { s += "fn " }
+        if generic.contains(.capsLock) { s += "⇪" }
         return s
     }
 }

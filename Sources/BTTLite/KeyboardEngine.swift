@@ -144,6 +144,7 @@ final class KeyboardEngine {
             }
 
             let observedModifiers = modifierState.effectiveModifiers(eventFlags: event.flags)
+            let observedSides = modifierState.effectiveModifierSides(eventFlags: event.flags)
 
             matching = profile.rules.filter { rule in
                 guard rule.enabled,
@@ -153,7 +154,17 @@ final class KeyboardEngine {
                       trigger.triggerOnKeyDown else {
                     return false
                 }
-                return modifiersMatch(observed: observedModifiers, expected: trigger.modifiers)
+                guard modifiersMatch(observed: observedModifiers, expected: trigger.modifiers) else {
+                    return false
+                }
+                if trigger.differentiateModifierSides == true {
+                    return sidesMatch(
+                        observed: observedSides,
+                        expected: trigger.modifierSides ?? [],
+                        generic: trigger.modifiers
+                    )
+                }
+                return true
             }
         } else if type == Self.systemDefinedEventType {
             guard let nsEvent = NSEvent(cgEvent: event) else { return false }
@@ -184,12 +195,23 @@ final class KeyboardEngine {
     private func modifiersMatch(observed: ModifierSet, expected: ModifierSet) -> Bool {
         var normalized = observed
         // Caps Lock is a keyboard state, not normally part of a hotkey chord.
-        // Do not let an enabled Caps Lock prevent an imported BTT shortcut from firing
-        // unless the shortcut explicitly asked for Caps Lock.
         if !expected.contains(.capsLock) {
             normalized.remove(.capsLock)
         }
         return normalized == expected
+    }
+
+    private func sidesMatch(
+        observed: ModifierSideSet,
+        expected: ModifierSideSet,
+        generic: ModifierSet
+    ) -> Bool {
+        var relevant: ModifierSideSet = []
+        if generic.contains(.control) { relevant.formUnion([.leftControl, .rightControl]) }
+        if generic.contains(.shift) { relevant.formUnion([.leftShift, .rightShift]) }
+        if generic.contains(.option) { relevant.formUnion([.leftOption, .rightOption]) }
+        if generic.contains(.command) { relevant.formUnion([.leftCommand, .rightCommand]) }
+        return observed.intersection(relevant) == expected.intersection(relevant)
     }
 
     private func scopeMatches(_ scope: RuleScope, frontmostBundleID: String?) -> Bool {

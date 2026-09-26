@@ -188,11 +188,35 @@ final class GestureEngine {
         return profile.rules.filter { rule in
             guard rule.enabled, scopeMatches(rule.scope, frontmostBundleID: frontmostBundleID) else { return false }
             guard case let .gesture(trigger) = rule.trigger else { return false }
-            return trigger.device == gesture.device &&
-                   trigger.fingers == gesture.fingers &&
-                   trigger.gesture == gesture.kind &&
-                   trigger.direction == gesture.direction
+            guard trigger.device == gesture.device &&
+                  trigger.fingers == gesture.fingers &&
+                  trigger.gesture == gesture.kind &&
+                  trigger.direction == gesture.direction else {
+                return false
+            }
+            return gestureModifiersMatch(trigger)
         }
+    }
+
+    private func gestureModifiersMatch(_ trigger: GestureTrigger) -> Bool {
+        let required = trigger.modifiers ?? []
+        guard !required.isEmpty else { return true }
+
+        let sessionFlags = CGEventSource.flagsState(.combinedSessionState)
+        let hidFlags = CGEventSource.flagsState(.hidSystemState)
+        let raw = sessionFlags.rawValue | hidFlags.rawValue
+        let observed = ModifierSet(rawValue: UInt64(raw)).intersection(.userRelevant)
+
+        // Gesture modifiers are a guard: the requested modifiers must be down.
+        // Extra modifiers do not disable the gesture, matching BTT's "required" semantics.
+        guard observed.intersection(required) == required else { return false }
+
+        if trigger.differentiateModifierSides == true {
+            let observedSides = ModifierSideSet(rawValue: UInt64(raw)).intersection(.all)
+            let expectedSides = trigger.modifierSides ?? []
+            guard observedSides.intersection(expectedSides) == expectedSides else { return false }
+        }
+        return true
     }
 
     private func scopeMatches(_ scope: RuleScope, frontmostBundleID: String?) -> Bool {

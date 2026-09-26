@@ -35,6 +35,15 @@ jobs:
             -framework ApplicationServices \
             -o /tmp/btt-input-regression
           /tmp/btt-input-regression
+      - name: BTT importer left/right modifier regression
+        run: |
+          set -euo pipefail
+          /usr/bin/xcrun swiftc \
+            Sources/BTTLite/Models.swift \
+            Sources/BTTLite/BTTImporter.swift \
+            Tests/BTTImporterRegression.swift \
+            -o /tmp/btt-importer-regression
+          /tmp/btt-importer-regression
       - name: Build application
         run: ./scripts/build-app.sh
       - name: Smoke test packaged app

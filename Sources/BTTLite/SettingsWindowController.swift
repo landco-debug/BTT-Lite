@@ -26,6 +26,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private let systemKeyCodeField = NSTextField()
     private let systemKeyNameField = NSTextField()
     private let triggerShortcutButton = NSButton(title: "Record Shortcut…", target: nil, action: nil)
+    private let differentiateSidesCheck = NSButton(checkboxWithTitle: "Distinguish left/right modifiers", target: nil, action: nil)
+    private let gestureModifierButton = NSButton(title: "Capture Held Modifiers", target: nil, action: nil)
 
     private let actionPopup = NSPopUpButton()
     private let actionKindPopup = NSPopUpButton()
@@ -217,6 +219,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         triggerShortcutButton.action = #selector(recordTriggerShortcut)
         triggerShortcutButton.toolTip = "Press the shortcut you want this keyboard trigger to recognize"
         addLabeledControl("Shortcut", control: triggerShortcutButton, y: &y)
+        differentiateSidesCheck.target = self
+        differentiateSidesCheck.action = #selector(ruleFieldChanged)
+        place(differentiateSidesCheck, x: 130, y: &y, height: 24)
+        gestureModifierButton.target = self
+        gestureModifierButton.action = #selector(captureGestureModifiers)
+        gestureModifierButton.toolTip = "Hold the desired modifier keys, then click this button"
+        addLabeledControl("Gesture modifiers", control: gestureModifierButton, y: &y)
         addLabeledField("Fingers", field: fingersField, y: &y, selector: #selector(ruleFieldChanged))
         gesturePopup.addItems(withTitles: GestureKind.allCases.map(\.displayName))
         gesturePopup.target = self
@@ -483,14 +492,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             keyCodeField.stringValue = String(k.keyCode)
             displayKeyField.stringValue = k.displayKey
             modifiersField.stringValue = String(k.modifiers.rawValue)
-            [keyCodeField, displayKeyField, modifiersField, triggerShortcutButton].forEach { $0.isHidden = false }
-            triggerShortcutButton.title = "Record…  " + shortcutDisplay(keyCode: k.keyCode, modifiers: k.modifiers, displayKey: k.displayKey)
+            differentiateSidesCheck.state = k.differentiateModifierSides == true ? .on : .off
+            [keyCodeField, displayKeyField, modifiersField, triggerShortcutButton, differentiateSidesCheck].forEach { $0.isHidden = false }
+            triggerShortcutButton.title = "Record…  " + shortcutDisplay(
+                keyCode: k.keyCode,
+                modifiers: k.modifiers,
+                modifierSides: k.differentiateModifierSides == true ? (k.modifierSides ?? []) : [],
+                displayKey: k.displayKey
+            )
         case let .gesture(g):
             triggerTypePopup.selectItem(at: g.device == .magicMouse ? 1 : 2)
             fingersField.stringValue = String(g.fingers)
             gesturePopup.selectItem(withTitle: g.gesture.displayName)
             directionPopup.selectItem(withTitle: g.direction?.rawValue.capitalized ?? "None")
-            [fingersField, gesturePopup, directionPopup].forEach { $0.isHidden = false }
+            modifiersField.stringValue = String((g.modifiers ?? []).rawValue)
+            differentiateSidesCheck.state = g.differentiateModifierSides == true ? .on : .off
+            gestureModifierButton.title = "Capture Held: " + gestureModifierDisplay(
+                modifiers: g.modifiers ?? [],
+                modifierSides: g.differentiateModifierSides == true ? (g.modifierSides ?? []) : []
+            )
+            [fingersField, gesturePopup, directionPopup, modifiersField, differentiateSidesCheck, gestureModifierButton].forEach { $0.isHidden = false }
         case let .systemKey(k):
             triggerTypePopup.selectItem(at: 3)
             systemKeyCodeField.stringValue = String(k.code)
@@ -515,7 +536,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     }
 
     private func hideAllTriggerFields() {
-        [keyCodeField, displayKeyField, modifiersField, triggerShortcutButton, fingersField, gesturePopup, directionPopup, systemKeyCodeField, systemKeyNameField].forEach { $0.isHidden = true }
+        [keyCodeField, displayKeyField, modifiersField, triggerShortcutButton, differentiateSidesCheck, gestureModifierButton, fingersField, gesturePopup, directionPopup, systemKeyCodeField, systemKeyNameField].forEach { $0.isHidden = true }
     }
 
     private func reloadActionEditor() {
@@ -549,7 +570,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             let mods = ModifierSet(rawValue: UInt64(action.parameters["modifiers"] ?? "") ?? 0)
             let display = action.parameters["displayKey"] ?? ""
             if let code {
-                actionShortcutButton.title = "Record…  " + shortcutDisplay(keyCode: code, modifiers: mods, displayKey: display)
+                let sides = ModifierSideSet(rawValue: UInt64(action.parameters["modifierSides"] ?? "") ?? 0)
+                actionShortcutButton.title = "Record…  " + shortcutDisplay(keyCode: code, modifiers: mods, modifierSides: sides, displayKey: display)
             } else {
                 actionShortcutButton.title = "Record Shortcut…"
             }
@@ -723,16 +745,34 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     private func currentTriggerFromEditor(existing: Trigger) -> Trigger {
         switch triggerTypePopup.indexOfSelectedItem {
         case 0:
+            let existingKeyboard: KeyboardTrigger? = {
+                if case let .keyboard(value) = existing { return value }
+                return nil
+            }()
             return .keyboard(KeyboardTrigger(
                 keyCode: UInt16(clamping: Int(keyCodeField.stringValue) ?? 0),
                 displayKey: displayKeyField.stringValue,
-                modifiers: ModifierSet(rawValue: UInt64(modifiersField.stringValue) ?? 0)
+                modifiers: ModifierSet(rawValue: UInt64(modifiersField.stringValue) ?? 0),
+                modifierSides: existingKeyboard?.modifierSides,
+                differentiateModifierSides: differentiateSidesCheck.state == .on
             ))
         case 1, 2:
             let device: GestureDevice = triggerTypePopup.indexOfSelectedItem == 1 ? .magicMouse : .trackpad
             let gesture = GestureKind.allCases[gesturePopup.indexOfSelectedItem.clamped(to: 0...(GestureKind.allCases.count - 1))]
             let direction: GestureDirection? = directionPopup.indexOfSelectedItem == 0 ? nil : GestureDirection.allCases[(directionPopup.indexOfSelectedItem - 1).clamped(to: 0...(GestureDirection.allCases.count - 1))]
-            return .gesture(GestureTrigger(device: device, fingers: max(1, Int(fingersField.stringValue) ?? 1), gesture: gesture, direction: direction))
+            let existingGesture: GestureTrigger? = {
+                if case let .gesture(value) = existing { return value }
+                return nil
+            }()
+            return .gesture(GestureTrigger(
+                device: device,
+                fingers: max(1, Int(fingersField.stringValue) ?? 1),
+                gesture: gesture,
+                direction: direction,
+                modifiers: ModifierSet(rawValue: UInt64(modifiersField.stringValue) ?? 0),
+                modifierSides: existingGesture?.modifierSides,
+                differentiateModifierSides: differentiateSidesCheck.state == .on
+            ))
         case 3:
             return .systemKey(SystemKeyTrigger(code: Int(systemKeyCodeField.stringValue) ?? 0, displayName: systemKeyNameField.stringValue))
         default:
@@ -800,6 +840,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
             }
 
             let modifiers = self.modifierSet(from: event.modifierFlags)
+            let sides = self.modifierSides(from: event.modifierFlags)
             let displayKey = self.displayKey(for: event)
             switch self.shortcutRecordTarget {
             case .trigger:
@@ -807,7 +848,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
                     rule.trigger = .keyboard(KeyboardTrigger(
                         keyCode: UInt16(event.keyCode),
                         displayKey: displayKey,
-                        modifiers: modifiers
+                        modifiers: modifiers,
+                        modifierSides: sides,
+                        differentiateModifierSides: self.differentiateSidesCheck.state == .on
                     ))
                 }
             case .action:
@@ -816,6 +859,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
                     action.title = "Send Keyboard Shortcut"
                     action.parameters["keyCode"] = String(event.keyCode)
                     action.parameters["modifiers"] = String(modifiers.rawValue)
+                    action.parameters["modifierSides"] = String(sides.rawValue)
                     action.parameters["displayKey"] = displayKey
                 }
             case .none:
@@ -836,15 +880,35 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
     }
 
     private func modifierSet(from flags: NSEvent.ModifierFlags) -> ModifierSet {
-        let flags = flags.intersection(.deviceIndependentFlagsMask)
+        let independent = flags.intersection(.deviceIndependentFlagsMask)
         var result: ModifierSet = []
-        if flags.contains(.capsLock) { result.insert(.capsLock) }
-        if flags.contains(.shift) { result.insert(.shift) }
-        if flags.contains(.control) { result.insert(.control) }
-        if flags.contains(.option) { result.insert(.option) }
-        if flags.contains(.command) { result.insert(.command) }
-        if flags.contains(.function) { result.insert(.function) }
+        if independent.contains(.capsLock) { result.insert(.capsLock) }
+        if independent.contains(.shift) { result.insert(.shift) }
+        if independent.contains(.control) { result.insert(.control) }
+        if independent.contains(.option) { result.insert(.option) }
+        if independent.contains(.command) { result.insert(.command) }
+        if independent.contains(.function) { result.insert(.function) }
         return result
+    }
+
+    private func modifierSides(from flags: NSEvent.ModifierFlags) -> ModifierSideSet {
+        ModifierSideSet(rawValue: UInt64(flags.rawValue)).intersection(.all)
+    }
+
+    @objc private func captureGestureModifiers() {
+        guard let selected = selectedRule(),
+              case .gesture = selected.trigger else { return }
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        let modifiers = modifierSet(from: flags)
+        let sides = modifierSides(from: flags)
+        updateSelectedRule { rule in
+            guard case let .gesture(current) = rule.trigger else { return }
+            var gesture = current
+            gesture.modifiers = modifiers
+            gesture.modifierSides = sides
+            gesture.differentiateModifierSides = self.differentiateSidesCheck.state == .on
+            rule.trigger = .gesture(gesture)
+        }
     }
 
     private func displayKey(for event: NSEvent) -> String {
@@ -866,9 +930,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTa
         }
     }
 
-    private func shortcutDisplay(keyCode: UInt16, modifiers: ModifierSet, displayKey: String) -> String {
+    private func shortcutDisplay(
+        keyCode: UInt16,
+        modifiers: ModifierSet,
+        modifierSides: ModifierSideSet = [],
+        displayKey: String
+    ) -> String {
         let key = displayKey.isEmpty ? "Key " + String(keyCode) : displayKey
-        return modifiers.symbols + key
+        let prefix = modifierSides.isEmpty ? modifiers.symbols : modifierSides.symbols(generic: modifiers)
+        return prefix + key
+    }
+
+    private func gestureModifierDisplay(modifiers: ModifierSet, modifierSides: ModifierSideSet) -> String {
+        if modifiers.isEmpty { return "None" }
+        return modifierSides.isEmpty ? modifiers.symbols : modifierSides.symbols(generic: modifiers)
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
