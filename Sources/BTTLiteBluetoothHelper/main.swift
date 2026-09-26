@@ -33,15 +33,6 @@ func ioReturnDescription(_ status: IOReturn) -> String {
     }
 }
 
-func waitUntil(_ predicate: () -> Bool, timeout: TimeInterval) -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    repeat {
-        if predicate() { return true }
-        Thread.sleep(forTimeInterval: 0.10)
-    } while Date() < deadline
-    return predicate()
-}
-
 let wanted = normalizedAddress(requestedAddress)
 let paired = IOBluetoothDevice.pairedDevices().compactMap { $0 as? IOBluetoothDevice }
 
@@ -65,31 +56,33 @@ guard device.isPaired() else {
     exit(4)
 }
 
+// IOBluetooth's openConnection()/closeConnection() calls are synchronous.
+// Their IOReturn is authoritative: success means the baseband connection was
+// created/closed. Do not second-guess a successful return with an immediately
+// sampled isConnected() value; that produced C11's impossible
+// "disconnect failed: success (0)" false error.
 if device.isConnected() {
     let status = device.closeConnection()
-    if !device.isConnected() || waitUntil({ !device.isConnected() }, timeout: 2.5) {
-        print("disconnected")
-        exit(0)
+    guard status == kIOReturnSuccess else {
+        fputs(
+            "Bluetooth disconnect failed: \(ioReturnDescription(status)) (\(status)). " +
+            "No automatic retry was made.\n",
+            stderr
+        )
+        exit(3)
     }
-
-    fputs(
-        "Bluetooth disconnect failed: \(ioReturnDescription(status)) (\(status)). " +
-        "No automatic retry was made.\n",
-        stderr
-    )
-    exit(3)
+    print("disconnected")
+    exit(0)
 } else {
     let status = device.openConnection()
-
-    if device.isConnected() || waitUntil({ device.isConnected() }, timeout: 2.0) {
-        print("connected")
-        exit(0)
+    guard status == kIOReturnSuccess else {
+        fputs(
+            "Bluetooth connect failed: \(ioReturnDescription(status)) (\(status)). " +
+            "No automatic retry was made.\n",
+            stderr
+        )
+        exit(3)
     }
-
-    fputs(
-        "Bluetooth connect failed: \(ioReturnDescription(status)) (\(status)). " +
-        "No automatic retry was made.\n",
-        stderr
-    )
-    exit(3)
+    print("connected")
+    exit(0)
 }

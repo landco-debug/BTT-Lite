@@ -24,6 +24,17 @@ jobs:
             Tests/GestureRecognizerRegression.swift \
             -o /tmp/btt-gesture-regression
           /tmp/btt-gesture-regression
+      - name: Keyboard and system-shortcut regression tests
+        run: |
+          set -euo pipefail
+          /usr/bin/xcrun swiftc \
+            Sources/BTTLite/Models.swift \
+            Sources/BTTLite/KeyboardModifierState.swift \
+            Sources/BTTLite/SystemSymbolicHotKey.swift \
+            Tests/InputSemanticsRegression.swift \
+            -framework ApplicationServices \
+            -o /tmp/btt-input-regression
+          /tmp/btt-input-regression
       - name: Build application
         run: ./scripts/build-app.sh
       - name: Smoke test packaged app

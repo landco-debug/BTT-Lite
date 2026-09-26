@@ -12,6 +12,7 @@ final class KeyboardEngine {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var suppressedKeyUps: Set<UInt16> = []
+    private var modifierState = KeyboardModifierState()
 
     init(store: ConfigStore, runner: ActionRunner) {
         self.store = store
@@ -36,6 +37,7 @@ final class KeyboardEngine {
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) |
                    CGEventMask(1 << CGEventType.keyUp.rawValue) |
+                   CGEventMask(1 << CGEventType.flagsChanged.rawValue) |
                    CGEventMask(1 << Self.systemDefinedEventType.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -44,6 +46,8 @@ final class KeyboardEngine {
 
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                 MainActor.assumeIsolated {
+                    engine.modifierState.reset()
+                    engine.suppressedKeyUps.removeAll(keepingCapacity: true)
                     if let tap = engine.eventTap {
                         CGEvent.tapEnable(tap: tap, enable: true)
                     }
@@ -63,12 +67,12 @@ final class KeyboardEngine {
 
         let info = Unmanaged.passUnretained(self).toOpaque()
 
-        // Fn/Globe transitions are hardware modifier events. The HID-level tap sees
-        // them most reliably on Apple laptop keyboards. Fall back to the session tap
-        // so ordinary hotkeys still work if HID-level interception is unavailable.
+        // BTT's Fn support is a custom shortcut path. A session tap gives us the
+        // complete flagsChanged/key stream needed for that state machine and was also
+        // the most reliable path for the user's Fn+number rules. HID is a fallback.
         let tap =
             CGEvent.tapCreate(
-                tap: .cghidEventTap,
+                tap: .cgSessionEventTap,
                 place: .headInsertEventTap,
                 options: .defaultTap,
                 eventsOfInterest: mask,
@@ -76,7 +80,7 @@ final class KeyboardEngine {
                 userInfo: info
             ) ??
             CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
+                tap: .cghidEventTap,
                 place: .headInsertEventTap,
                 options: .defaultTap,
                 eventsOfInterest: mask,
@@ -105,11 +109,20 @@ final class KeyboardEngine {
         runLoopSource = nil
         eventTap = nil
         suppressedKeyUps.removeAll(keepingCapacity: true)
+        modifierState.reset()
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Bool {
         let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         if frontmostBundleID == Bundle.main.bundleIdentifier { return false }
+
+        if type == .flagsChanged {
+            modifierState.observeFlagsChanged(
+                keyCode: event.getIntegerValueField(.keyboardEventKeycode),
+                eventFlags: event.flags
+            )
+            return false
+        }
 
         if type == .keyUp {
             let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
@@ -122,7 +135,15 @@ final class KeyboardEngine {
         let matching: [Rule]
         if type == .keyDown {
             let keyCode = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-            let observedModifiers = currentModifiers(eventFlags: event.flags)
+
+            // Once this physical key press has been claimed, swallow every autorepeat
+            // until its keyUp. Otherwise releasing Fn while still holding "4" can let
+            // a repeat event escape into the active text field after the action fired.
+            if suppressedKeyUps.contains(keyCode) {
+                return true
+            }
+
+            let observedModifiers = modifierState.effectiveModifiers(eventFlags: event.flags)
 
             matching = profile.rules.filter { rule in
                 guard rule.enabled,
@@ -158,26 +179,6 @@ final class KeyboardEngine {
             suppressedKeyUps.insert(keyCode)
         }
         return true
-    }
-
-    private func currentModifiers(eventFlags: CGEventFlags) -> ModifierSet {
-        var modifiers = ModifierSet(rawValue: UInt64(eventFlags.rawValue))
-            .intersection(.userRelevant)
-
-        // Fn is deliberately NOT cached across events. C10 showed why: the Fn-release
-        // flagsChanged callback can race the HID state and leave a cached "down" bit
-        // stuck, turning later plain 1/2/3/4 presses into Fn+number hotkeys.
-        //
-        // Sample the physical kVK_Function (63) state exactly when the main key-down
-        // arrives. If the event itself already carries maskSecondaryFn that is accepted
-        // too. Releasing Fn therefore cannot poison any later number key.
-        if eventFlags.contains(.maskSecondaryFn) ||
-           CGEventSource.keyState(.hidSystemState, key: Self.fnKeyCode) {
-            modifiers.insert(.function)
-        } else {
-            modifiers.remove(.function)
-        }
-        return modifiers
     }
 
     private func modifiersMatch(observed: ModifierSet, expected: ModifierSet) -> Bool {

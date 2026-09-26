@@ -64,9 +64,9 @@ final class ActionRunner {
             let timeout = Double(action.parameters["timeout"] ?? "") ?? 5.0
             await waitForClipboardChange(timeout: max(0.1, timeout))
         case .moveSpaceLeft:
-            sendKeyCode(123, modifiers: [.control])
+            sendSpaceShortcut(symbolicHotKeyID: 79, fallbackKeyCode: 123)
         case .moveSpaceRight:
-            sendKeyCode(124, modifiers: [.control])
+            sendSpaceShortcut(symbolicHotKeyID: 81, fallbackKeyCode: 124)
         case .pageBack:
             // Common native navigation fallback. Gesture-native navigation is
             // implemented with the gesture engine in a later commit.
@@ -192,6 +192,19 @@ final class ActionRunner {
         return false
     }
 
+    private func sendSpaceShortcut(symbolicHotKeyID: Int, fallbackKeyCode: UInt16) {
+        if let configured = SystemSymbolicHotKeyResolver.current(id: symbolicHotKeyID) {
+            sendKeyCode(configured.keyCode, modifiers: configured.modifiers)
+            return
+        }
+
+        // Modern MacBook defaults encode Control+Arrow with the secondary-Fn bit.
+        // This fallback is only used if the user's symbolic-hotkey preference cannot
+        // be read. Normally we use the exact System Settings value above, like BTT.
+        NSLog("BTT Lite: Mission Control symbolic hotkey %d could not be resolved; using fallback", symbolicHotKeyID)
+        sendKeyCode(fallbackKeyCode, modifiers: [.control, .function])
+    }
+
     private func sendKeyCode(_ keyCode: UInt16, modifiers: ModifierSet, targetPID: pid_t? = nil) {
         // A HID-state source plus flags on the actual key event is enough for ordinary
         // AppKit shortcuts and for Mission Control's Ctrl+←/→ on macOS Sequoia.
@@ -209,6 +222,8 @@ final class ActionRunner {
         if modifiers.contains(.option) { flags.insert(.maskAlternate) }
         if modifiers.contains(.shift) { flags.insert(.maskShift) }
         if modifiers.contains(.command) { flags.insert(.maskCommand) }
+        if modifiers.contains(.numericPad) { flags.insert(.maskNumericPad) }
+        if modifiers.contains(.help) { flags.insert(.maskHelp) }
 
         func post(_ down: Bool) {
             guard let event = CGEvent(

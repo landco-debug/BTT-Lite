@@ -392,3 +392,53 @@ Retest contract:
 2. Hold Fn and press 1, then Fn+4: only the explicit Fn chords should fire; their digits must not leak to the frontmost app.
 3. For Bluetooth, test at most one disconnect and one reconnect. If reconnect times out again, stop there and report the C11 diagnostic; do not power-cycle repeatedly for the test.
 4. With Magic Mouse, 3-finger left/right should switch Spaces without activating Handy. The macOS Mouse setting for “Swipe between full-screen applications” may remain disabled.
+
+
+## C12 — BTT-compatible Fn state machine, Mission Control shortcut resolution, Bluetooth result semantics
+
+Status: implemented after C11 on-device retest and targeted documentation/forum research; macOS CI validation pending at commit time.
+
+Observed C11 failures:
+- Fn+4 could launch the Bluetooth action once but also leaked the character “4” into the focused field; later presses often did nothing.
+- Plain digits were now safe, but Fn+number actions that had worked in earlier builds became rare/delayed.
+- Bluetooth showed the internally contradictory alert “disconnect failed: success (0)”.
+- Magic Mouse 3-finger left/right still did not switch Spaces, although the C11 removal of fake Control transitions stopped accidental Handy activation.
+
+Research conclusions:
+- BetterTouchTool's author explicitly documents that macOS does not offer ordinary Fn shortcuts; BTT uses its own shortcut system for Fn. Fn shortcuts are unavailable in Secure Input mode. Apple exposes Fn as CGEventFlags.maskSecondaryFn on keyboard/mouse/flagsChanged events.
+- The C11 HID-state-only Fn sampling was therefore the wrong model. It removed C10's sticky flag but also discarded the reliable Fn transition stream used by a custom shortcut implementation.
+- BetterTouchTool's author also explicitly states that the normal “Move Left/Right a Space” actions use the shortcuts configured in System Settings → Keyboard → Keyboard Shortcuts → Mission Control. They are not hard-coded Ctrl+Arrow actions inside BTT.
+- macOS stores those actions as AppleSymbolicHotKeys IDs 79 (left) and 81 (right). Contemporary Mac defaults commonly encode Control+Arrow with modifier value 8650752, i.e. Control plus the secondary-Fn bit. C11 hard-coded only Control, so it did not actually reproduce the system shortcut BTT invokes.
+- BTT's action definition confirms predefined action 276 means “Toggle Bluetooth Device” connection, not Bluetooth radio power.
+- Apple's IOBluetooth documentation states closeConnection() is synchronous and returns kIOReturnSuccess only when the baseband connection has successfully been closed. Therefore C11's later isConnected() poll was invalid as a reason to convert status 0 into failure. It directly created the impossible “failed: success (0)” alert.
+- BTT itself is closed source, so its private Bluetooth implementation cannot be asserted. However the documented action semantics and public IOBluetooth API are sufficient here; established macOS Bluetooth utilities use openConnection/closeConnection for this operation.
+
+Fn/hotkey fixes:
+- Added a dedicated KeyboardModifierState driven by flagsChanged. Fn-down is learned from maskSecondaryFn; the Fn release edge overwrites state rather than OR-ing stale HID/session values. This preserves C10's protection against sticky Fn while restoring the transition-based model needed for reliable Fn+number shortcuts.
+- KeyboardEngine again subscribes to flagsChanged and prefers the session event tap (HID remains fallback).
+- On an event-tap disable/re-enable, cached modifier and claimed-key state are reset defensively.
+- The first matched keyDown claims that physical key until keyUp. Every autorepeat keyDown for an already-claimed key is swallowed. This fixes the exact C11 “action fires, then a literal 4 appears” sequence when Fn is released while the number key is still held.
+- Fn release cannot poison later ordinary digits; ordinary 1–0 remain ordinary.
+
+Space-switch fixes:
+- Added SystemSymbolicHotKeyResolver. “Move Left a Space” now resolves AppleSymbolicHotKeys ID 79 and “Move Right a Space” ID 81 from the user's current macOS preferences and sends the exact configured key code/modifier mask.
+- If those preferences cannot be read, the MacBook fallback is Control+Fn+Left/Right, not C11's Control-only approximation.
+- Numeric-pad/help modifier bits are now preserved when synthesizing a configured system shortcut.
+- This applies to any trigger that invokes moveSpaceLeft/moveSpaceRight, including the user's Magic Mouse 3-finger swipes. The macOS Mouse setting “Swipe between full-screen applications” can remain off because BTT Lite triggers the Mission Control keyboard action, matching BTT's documented behavior.
+
+Bluetooth fix:
+- Removed the post-success isConnected polling test. One closeConnection/openConnection call is issued and its synchronous IOReturn is authoritative.
+- A successful closeConnection now exits successfully immediately; it can no longer produce “disconnect failed: success (0)”.
+- Non-success statuses (including timeout) are still reported and never automatically retried, preserving the C11 safety change for the Mac/remote Linux Bluetooth stacks.
+
+Regression coverage added:
+- Fn press → Fn+number → Fn release → plain number, verifying Fn cannot remain sticky.
+- Fn supplied directly on a key event without a prior transition.
+- Parsing of modern Mission Control IDs 79/81 with modifier 8650752, verifying both Control and secondary-Fn are retained.
+- CI runs these tests before the application build.
+
+Retest contract:
+1. Hold Fn and press 1/2/3/4/5/6 as configured: each action should fire once with no leaked digit and no long delay.
+2. Release Fn, then type 1234567890 normally: no action should fire.
+3. Fn+4 disconnect: status 0 must be treated as success with no error dialog. Press Fn+4 again once to reconnect; if openConnection returns timeout, report that exact error and stop—no retries are generated.
+4. Magic Mouse 3-finger left/right: the current System Settings Mission Control shortcut is now used exactly. If the system's “Move left/right a space” shortcuts themselves are disabled/conflicted, BTT's documented behavior also depends on fixing them.
