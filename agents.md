@@ -856,3 +856,25 @@ Package inspection after CI:
 - `three-finger-double-tap` points to `~/bin/trickpad-hide-hovered-dock-app`.
 
 This TP08 package is the current canonical pilot baseline.
+
+
+## TP09 — Handoff after TP08 Dock double-tap still fails
+
+Status: unresolved; handoff prepared for a stronger adjacent-chat model.
+
+Real-device result:
+- TP08 preserves the accepted TP04 one-swipe/one-action behavior.
+- TP08 still fails the trackpad 3-finger double-tap Dock action with Trickpad reporting `trickpad-hide-hovered-dock-app` exit code 2.
+- Therefore TP07 semantic hover lookup + recursive geometry fallback did not solve the Dock target resolution on this MacBook Air M1 / macOS Sequoia.
+
+Do not change next:
+- Keep TP04 `trickpad-close-tab-once` and `trickpad-reopen-tab-once` wrappers and 300 ms coalescing exactly as the current baseline.
+- Do not revert up/down swipes to direct Trickpad shortcuts.
+
+Required next diagnostic:
+- Read `~/Library/Logs/TrickpadPilot/dock-helper.log` from the real Mac before another Dock implementation change.
+- If the log is absent, verify the installed helper, `--check` Accessibility status, and installed TOML bindings.
+- No further theory-only Dock rewrite should be made without those runtime observations.
+
+Dedicated handoff:
+- `HANDOFF_TRICKPAD_TP08_DOCK_DOUBLE_TAP_RU.md`
