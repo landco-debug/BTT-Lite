@@ -719,3 +719,33 @@ Retest contract:
 2. Do not evaluate or tune the 3-finger swipe up/down gestures as part of this change; they are intentionally unchanged.
 3. Put the pointer directly over an application icon in Dock and perform the 3-finger double-tap.
 4. Expected: the target Dock app is activated and then hidden with ⌘H; no exit-code-2 popover.
+
+
+## TP06 — Robust Dock-tree lookup; swipes frozen
+
+Status: implemented from the second real-device failure of the 3-finger double-tap helper; CI validation is triggered by this commit.
+
+User direction:
+- Treat the current direct 3-finger swipe up/down behavior as the known-good baseline.
+- Do not tune, debounce, wrap or otherwise change those swipe bindings.
+- Fix only the 3-finger double-tap Dock action.
+
+Observed:
+- TP04/TP05 still showed Trickpad's “script binding didn't run” popover with helper exit code 2.
+- Exit code 2 means the helper still could not resolve an application Dock item under the pointer.
+- Merely switching from NSEvent.mouseLocation to CGEventGetLocation was therefore insufficient on this Sequoia setup.
+
+TP06 change:
+- Removed system-wide Accessibility hit-testing from the Dock helper.
+- The helper now finds the running Dock process by bundle id `com.apple.dock`, creates an AX application element for that PID, finds Dock's AXList, enumerates its AXDockItem children, restricts matches to subrole `AXApplicationDockItem`, reads each item's AX position/size frame and matches the Quartz pointer position directly against those frames.
+- A conservative 14-point nearest-item fallback covers brief Dock magnification/frame-animation lag without jumping to a remote icon.
+- The helper remains short-lived and uses the same installed path and designated identifier.
+- Magic Mouse and trackpad 3-finger swipe up/down lines remain exactly the direct TP03/TP05 bindings: up = ⇧⌘T, down = ⌘W.
+- No Trickpad upstream source is modified.
+
+Retest contract:
+1. Install TP06 over the existing pilot.
+2. Do not change or retest swipe sensitivity as part of this commit.
+3. Put the pointer visibly over an application icon in Dock.
+4. Perform the trackpad 3-finger double-tap.
+5. Expected: the icon is resolved from Dock's own Accessibility tree, the app is activated, then ⌘H hides it; no exit-code-2 popover.
