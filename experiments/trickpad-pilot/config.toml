@@ -8,14 +8,14 @@ haptic-feedback = true
 menu-bar-icon = "trickpad"
 
 [MOUSE]
-three-finger-swipe-up = "cmd+shift+t"
-three-finger-swipe-down = "cmd+w"
+three-finger-swipe-up = "script:~/bin/trickpad-reopen-tab-once"
+three-finger-swipe-down = "script:~/bin/trickpad-close-tab-once"
 three-finger-click = "cmd+shift+v"
 
 [TRACKPAD]
 three-finger-click = "cmd+shift+v"
-three-finger-swipe-up = "cmd+shift+t"
-three-finger-swipe-down = "cmd+w"
+three-finger-swipe-up = "script:~/bin/trickpad-reopen-tab-once"
+three-finger-swipe-down = "script:~/bin/trickpad-close-tab-once"
 three-finger-double-tap = "script:~/bin/trickpad-hide-hovered-dock-app"
 
 # The two required 2-finger horizontal trackpad gestures remain native macOS:

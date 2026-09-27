@@ -648,3 +648,31 @@ On-device test gate:
 - First test only the agreed 3 Magic Mouse + 6 trackpad behaviors.
 - Trackpad 2-finger left/right remain native macOS page navigation by design.
 - If the pilot proves reliable, the next decision is whether the menu-bar/updater/UI footprint is acceptable or whether a minimal custom/headless fork is justified.
+
+
+## TP04 — Fix repeated swipe actions and Dock hit-testing
+
+Status: implemented from the first real-device pilot report; CI validation is triggered by this commit.
+
+Observed on MacBook Air M1 / macOS Sequoia:
+- 3-finger swipe up/down could open or close two tabs from one physical swipe.
+- 3-finger double-tap over Dock produced Trickpad's popover: helper exited with code 2.
+
+Root causes:
+- The duplicate tab action is not a sensitivity setting. Upstream Trickpad intentionally allows an owning swipe recognizer to repeat while the same contact sequence remains active. Directly binding ⇧⌘T / ⌘W therefore does not guarantee exactly one action per physical swipe.
+- The Dock helper used NSEvent.mouseLocation with AXUIElementCopyElementAtPosition. Accessibility hit-testing expects top-left-relative screen coordinates, while NSEvent.mouseLocation follows the AppKit lower-left global coordinate system. The mismatch made the helper miss the Dock item and return exit code 2.
+
+Changes without modifying upstream Trickpad:
+- The existing short-lived helper now obtains the pointer through CGEventGetLocation, matching the coordinate orientation expected by Accessibility hit-testing.
+- The same already-authorized helper gained two modes: close-once and reopen-once.
+- Added two tiny wrapper scripts in ~/bin: trickpad-close-tab-once and trickpad-reopen-tab-once.
+- Up/down swipe bindings now call those wrappers. The helper coalesces rapid repeat dispatches from one continuous Trickpad swipe using a 300 ms quiet-window gate, while remaining non-resident.
+- The helper path and designated identifier remain unchanged, so the existing Accessibility grant should remain valid after reinstall.
+- No Trickpad source code was changed; this remains a test of the upstream application.
+
+Retest contract:
+1. Re-run the updated pilot installer over the existing install.
+2. Quit BetterTouchTool completely during the pilot so identical BTT gestures cannot add a second action.
+3. Reload Trickpad settings.
+4. Perform 10 deliberate swipe-up and 10 swipe-down gestures on the device being tested; each physical gesture should create exactly one ⇧⌘T or ⌘W.
+5. Put the pointer directly over a Dock app icon and perform the 3-finger double-tap; the old exit-code-2 popover should no longer appear and the target app should activate then hide.
