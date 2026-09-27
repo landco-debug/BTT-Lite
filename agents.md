@@ -832,3 +832,27 @@ On-device retest:
 2. Confirm one deliberate swipe up opens/restores exactly one tab, and one swipe down closes exactly one tab.
 3. Confirm 3-finger double-tap over an app icon in Dock activates then hides it.
 4. If Dock double-tap still fails, collect only `~/Library/Logs/TrickpadPilot/dock-helper.log`; do not change swipe logic.
+
+
+## TP08.1 — Green CI and verified combined package
+
+Status: complete.
+
+Validation:
+- GitHub Actions run `36282682117` completed with conclusion `success`.
+- Upstream Trickpad checks passed unchanged.
+- Combined helper compiled for arm64/macOS 15+ and passed strict code-sign verification.
+- CI verified both TP04 wrapper scripts exist and are executable.
+- CI verified mouse and trackpad 3-finger swipe up/down are bound to the TP04 wrappers, not direct shortcuts.
+- CI verified trackpad 3-finger double-tap remains bound to the TP07-derived Dock helper.
+- Artifact: `Trickpad-Pilot-0.14.0-TP08`, Actions artifact ID `10919332446`.
+- GitHub outer artifact SHA-256: `ef5a6cd4d051b63e6d4becb3b484041d52ba58e6a705642b851666610f6b27e2`.
+- Ready-to-install inner ZIP SHA-256: `7c2951b583512cb0fb152fe05ccd8e8bbf2233b54f0e86b2c1ae845e094cfe7e`.
+
+Package inspection after CI:
+- `pilot/bin/trickpad-close-tab-once` is present and invokes the compiled helper with `close-once`.
+- `pilot/bin/trickpad-reopen-tab-once` is present and invokes the compiled helper with `reopen-once`.
+- `config.toml` contains the expected TP04 wrapper bindings for both Magic Mouse and trackpad.
+- `three-finger-double-tap` points to `~/bin/trickpad-hide-hovered-dock-app`.
+
+This TP08 package is the current canonical pilot baseline.
