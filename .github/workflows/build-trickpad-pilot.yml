@@ -63,6 +63,26 @@ jobs:
           /usr/bin/codesign --verify --strict pilot/bin/trickpad-hide-hovered-dock-app
           /usr/bin/file pilot/bin/trickpad-hide-hovered-dock-app | /usr/bin/grep -q "arm64"
 
+      - name: Test window targeting and preserve accepted swipe implementation
+        run: |
+          set -euo pipefail
+          pilot/bin/trickpad-hide-hovered-dock-app --self-test
+          git fetch --depth 1 origin 69a534c92eeea8e35f3789b124a1b31b941a9bc2
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          base = '69a534c92eeea8e35f3789b124a1b31b941a9bc2'
+          root = 'experiments/trickpad-pilot/'
+          old = subprocess.check_output(['git', 'show', base + ':' + root + 'trickpad-hide-hovered-dock-app.m']).decode()
+          new = Path(root + 'trickpad-hide-hovered-dock-app.m').read_text()
+          swipe = old[old.index('static const useconds_t kSwipeQuietWindowUS'):old.index('static void postCommandH')]
+          assert swipe in new, 'Accepted swipe code changed'
+          for name in ['config.toml', 'trickpad-close-tab-once', 'trickpad-reopen-tab-once']:
+              assert Path(root + name).read_bytes() == subprocess.check_output(['git', 'show', base + ':' + root + name]), name
+          assert 'AXSelectedChildren' not in new and 'com.apple.dock' not in new
+          print('TP04 swipe code, wrappers and bindings preserved byte-for-byte')
+          PY
+
       - name: Assemble pilot package
         run: |
           set -euo pipefail
@@ -75,7 +95,7 @@ jobs:
           Upstream: nweii/trickpad 0.14.0
           Commit: e16f7fcd1613b9df944957cbda0e69d8eaf19163
           Trickpad source is unmodified.
-          Custom components: TP04 swipe-repeat coalescing plus TP07 semantic Dock-hover resolution with failure diagnostics.
+          Custom components: TP04 swipe-repeat coalescing unchanged; TP10 hides the app owning the window under the pointer.
           EOF
 
       - name: Smoke-check package
@@ -89,13 +109,13 @@ jobs:
           /usr/bin/grep -q 'three-finger-swipe-up = "script:~/bin/trickpad-reopen-tab-once"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-swipe-down = "script:~/bin/trickpad-close-tab-once"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-double-tap = "script:~/bin/trickpad-hide-hovered-dock-app"' pilot/config.toml
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP08.zip
-          test -s Trickpad-Pilot-0.14.0-TP08.zip
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip
+          test -s Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip
 
       - name: Upload pilot
         uses: actions/upload-artifact@v4
         with:
-          name: Trickpad-Pilot-0.14.0-TP08
-          path: Trickpad-Pilot-0.14.0-TP08.zip
+          name: Trickpad-Pilot-0.14.0-TP10-Window-Hide
+          path: Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip
           if-no-files-found: error
           retention-days: 7

@@ -1,62 +1,43 @@
-# Trickpad pilot
+# Trickpad pilot — TP10 Window Hide
 
-This branch is an isolated pilot for replacing the user's BetterTouchTool mouse/trackpad gesture subset with the upstream Trickpad app **without modifying Trickpad itself**.
+Upstream Trickpad 0.14.0 remains unmodified at e16f7fcd1613b9df944957cbda0e69d8eaf19163.
+Target: Apple Silicon, macOS Sequoia 15+.
 
-## Upstream
+## Corrected double-tap requirement
 
-- Repository: `nweii/trickpad`
-- Pilot baseline: upstream release **0.14.0**
-- Pinned source commit: `e16f7fcd1613b9df944957cbda0e69d8eaf19163`
-- License: GPL-3.0
-- The end-user Mac must not need Homebrew, Xcode, or Command Line Tools. CI will build the app.
+Three-finger double-tap hides the application owning the visible window under the
+pointer. The pointer may be over the window content or title bar. No Dock hover
+or click is required. When windows overlap, the frontmost normal window at that
+point wins. The action hides the entire application (like Command-H), not just
+one window. Outside an application window it does nothing.
 
-## Required behavior
+The helper obtains visible window bounds and owner PIDs via Quartz Window
+Services, then calls NSRunningApplication.hide for that exact process. It does
+not activate another application, inject Command-H, capture pixels or read
+window titles. No resident helper, polling service or new package dependency.
 
-### Magic Mouse — 3 gestures
+The historical helper filename and signing identifier are intentionally retained
+to preserve the installed binding and permission identity. The filename's
+'dock' part no longer describes the action.
 
-| Gesture | Action |
-|---|---|
-| 3 Finger Swipe Up | ⇧⌘T |
-| 3 Finger Swipe Down | ⌘W |
-| 3 Finger Click | ⇧⌘V |
+## Install
 
-### Built-in MacBook trackpad — 6 gestures
+Extract Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip, then open pilot/install.command.
+Install over TP08; the installer restarts Trickpad and backs up the old config.
+Existing Accessibility grants for Trickpad and the helper are still required.
+No Homebrew or local developer tools are required.
+Test by leaving the pointer over the Chrome window and double-tapping with three
+fingers. Chrome should hide. The real gesture must be confirmed on the user's Mac.
 
-| Gesture | Action |
-|---|---|
-| 3 Finger Click | ⇧⌘V |
-| 3 Finger Swipe Up | ⇧⌘T |
-| 3 Finger Swipe Down | ⌘W |
-| 2 Finger Swipe Left | Page Forward |
-| 2 Finger Swipe Right | Page Back |
-| 3 Finger Double-Tap | Activate hovered Dock app, then ⌘H |
+## Unchanged gestures
 
-## Important Trickpad limitation
+Mouse: 3-finger up/down use the TP04 once-only wrappers; click sends Shift-Command-V.
+Trackpad: same up/down/click bindings; native macOS two-finger page navigation.
+TP04 swipe code, both wrappers and config.toml are checked byte-for-byte in CI.
 
-Trickpad 0.14.0 does **not** expose 2-finger swipes on the trackpad. Its trackpad swipe recognizers support 3–4 fingers. The two required 2-finger page-navigation gestures therefore stay native in macOS:
+## Validation
 
-System Settings → Trackpad → More Gestures → Swipe between pages → **Scroll left or right with two fingers**.
-
-This exactly covers the required left = forward / right = back behavior and avoids a redundant resident gesture recognizer.
-
-The Dock double-tap action is not a built-in Trickpad action. The pilot config points it to one short-lived helper in `~/bin`; the helper will be built in CI and launched only when that gesture fires.
-
-
-## Pilot build status
-
-CI run **36278333271** completed successfully for TP02. Every stage passed: pinned-upstream fetch, upstream checks/build, Dock helper build, package assembly, signature smoke checks, binding smoke checks, and artifact upload.
-
-Ready-to-test package: `Trickpad-Pilot-0.14.0.zip`.
-
-GitHub Actions artifact digest (outer Actions artifact): `sha256:037830779de1d006e772548f83fd35f16fe5bde5fb9a7a79fa1022f4c471fd45`.
-
-Extracted ready-to-install inner ZIP digest: `sha256:2e42a0b642297e15b4a00e213ba55e1e3828775cddc63027af8f8d05862b38d5`.
-
-### First on-device test
-
-1. Unzip `Trickpad-Pilot-0.14.0.zip`.
-2. Open `pilot/install.command`.
-3. Grant Accessibility to Trickpad and to `~/bin/trickpad-hide-hovered-dock-app`.
-4. In System Settings → Trackpad → More Gestures, set **Swipe between pages** to **Scroll left or right with two fingers**.
-5. From the Trickpad menu choose **Reload Settings**.
-6. Test the three Magic Mouse bindings and the six trackpad behaviors before changing anything else.
+CI compiles/signs the arm64 helper, executes seven targeting tests (overlap,
+background window, negative display coordinates, menu bar, desktop, empty list),
+checks preserved TP04 code/bindings, and runs upstream checks/build.
+No automated test substitutes for the user's physical gesture on Sequoia.

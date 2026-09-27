@@ -878,3 +878,34 @@ Required next diagnostic:
 
 Dedicated handoff:
 - `HANDOFF_TRICKPAD_TP08_DOCK_DOUBLE_TAP_RU.md`
+
+
+## TP10 — Correct the actual requirement: hide the app under the pointer
+
+Status: implemented after the user's explicit clarification on 2026-09-27; CI pending.
+
+The user clarified that three-finger double-tap must hide the application whose
+window is under the pointer, not an app icon in Dock. Earlier TP01-TP09 Dock
+requirements and the dedicated TP08 handoff were incorrect for this gesture.
+Runtime logs showed trusted=yes and valid Dock geometry but no hovered Dock item;
+the failure was consistent with using a window gesture away from Dock.
+
+Changes:
+- Replace all Dock AX lookup/activation/global Command-H code with Quartz visible
+  window bounds + owner PID lookup and NSRunningApplication.hide for that app.
+- Select the frontmost ordinary visible window containing the Quartz pointer.
+  Exclude desktop elements, nonzero window layers and transparent windows.
+- No target outside an app window is a successful no-op; never hide an unrelated
+  frontmost app as fallback.
+- Hides the whole app, consistent with Command-H, rather than minimizing a window.
+- Retain the historical executable path/signing identifier for binding/grant compatibility.
+- Preserve TP04 swipe gate and shortcut routines byte-for-byte, as well as both
+  wrapper scripts and the entire config.toml. No upstream Trickpad changes.
+- Add seven pure targeting tests and CI checks for the preserved TP04 implementation.
+- Update README and mark the earlier handoff obsolete.
+- No new background process, screen capture, Homebrew or local developer tools.
+
+Validation scope:
+CI validates compilation, arm64 signature, targeting cases and swipe preservation.
+Actual physical gesture and cross-process hide still require the user's Mac.
+Do not claim real-device success from CI alone.
