@@ -1,43 +1,35 @@
-# Trickpad pilot — TP10 Window Hide
+# Trickpad pilot — TP11 Window Hide
 
-Upstream Trickpad 0.14.0 remains unmodified at e16f7fcd1613b9df944957cbda0e69d8eaf19163.
-Target: Apple Silicon, macOS Sequoia 15+.
+Upstream Trickpad 0.14.0 is pinned and unmodified. Apple Silicon / macOS Sequoia.
 
-## Corrected double-tap requirement
+The trackpad three-finger double-tap hides the application owning the visible
+window under the pointer, whether or not the pointer is over Dock. Overlapping
+windows target the uppermost ordinary window. When there is no app window under
+the pointer, the gesture has no effect. Hiding an app affects all of its windows.
 
-Three-finger double-tap hides the application owning the visible window under the
-pointer. The pointer may be over the window content or title bar. No Dock hover
-or click is required. When windows overlap, the frontmost normal window at that
-point wins. The action hides the entire application (like Command-H), not just
-one window. Outside an application window it does nothing.
+TP11 follows a real-device TP10 report: the window hid after three attempts,
+and Trickpad reported helper exit code 3. The helper first requests hide through
+AppKit; if AppKit refuses, it uses its existing Accessibility grant to set the
+same app's AXHidden attribute. Repeated dispatches of one gesture are coalesced
+for a short quiet interval so the next window below is not also hidden. If both
+hide requests fail, the helper saves one diagnostic at
+~/Library/Logs/TrickpadPilot/window-hide.log and returns a real error.
 
-The helper obtains visible window bounds and owner PIDs via Quartz Window
-Services, then calls NSRunningApplication.hide for that exact process. It does
-not activate another application, inject Command-H, capture pixels or read
-window titles. No resident helper, polling service or new package dependency.
+The helper keeps its historical `trickpad-hide-hovered-dock-app` filename and
+signature identity solely so existing bindings and grants remain valid.
 
-The historical helper filename and signing identifier are intentionally retained
-to preserve the installed binding and permission identity. The filename's
-'dock' part no longer describes the action.
+## Install and check
 
-## Install
+Extract Trickpad-Pilot-0.14.0-TP11-Window-Hide.zip. Open
+`pilot/install.command` to install over TP10; it backs up the prior config.
+Leave the pointer over a Chrome window and double-tap the trackpad with three
+fingers once. Chrome should hide without a Trickpad error popup. If it fails,
+send the contents of ~/Library/Logs/TrickpadPilot/window-hide.log.
 
-Extract Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip, then open pilot/install.command.
-Install over TP08; the installer restarts Trickpad and backs up the old config.
-Existing Accessibility grants for Trickpad and the helper are still required.
-No Homebrew or local developer tools are required.
-Test by leaving the pointer over the Chrome window and double-tapping with three
-fingers. Chrome should hide. The real gesture must be confirmed on the user's Mac.
+The Magic Mouse and trackpad three-finger swipe up/down bindings still use the
+TP04 once-only wrappers. Both wrappers, the config and TP04 swipe code remain
+byte-for-byte unchanged. Two-finger horizontal page gestures remain native macOS.
 
-## Unchanged gestures
-
-Mouse: 3-finger up/down use the TP04 once-only wrappers; click sends Shift-Command-V.
-Trackpad: same up/down/click bindings; native macOS two-finger page navigation.
-TP04 swipe code, both wrappers and config.toml are checked byte-for-byte in CI.
-
-## Validation
-
-CI compiles/signs the arm64 helper, executes seven targeting tests (overlap,
-background window, negative display coordinates, menu bar, desktop, empty list),
-checks preserved TP04 code/bindings, and runs upstream checks/build.
-No automated test substitutes for the user's physical gesture on Sequoia.
+CI verifies the unchanged upstream build, arm64 helper signature, window-target
+cases, duplicate-hide gate, and preservation of TP04 swipe code and bindings.
+Only a real-device test can establish the physical gesture result on Sequoia.

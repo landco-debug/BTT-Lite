@@ -909,3 +909,30 @@ Validation scope:
 CI validates compilation, arm64 signature, targeting cases and swipe preservation.
 Actual physical gesture and cross-process hide still require the user's Mac.
 Do not claim real-device success from CI alone.
+
+
+## TP11 — Real-device TP10 exit code 3: fallback and duplicate protection
+
+Status: implemented; CI and on-device recheck pending at commit time.
+
+Observed: the correct window finally hid after the user's third double-tap,
+but Trickpad also reported helper exit code 3. This code is returned when
+NSRunningApplication.hide refuses a target found by visible-window lookup.
+The popup alone cannot establish whether it came from an earlier attempt or a
+second helper launched for one physical gesture.
+
+Changes:
+- On AppKit hide refusal, request the same process's AXHidden attribute via
+  the existing Accessibility grant. Treat an already-hidden or terminated app
+  as success after an AppKit run-loop turn. If both paths fail, write a
+  failure-only ~/Library/Logs/TrickpadPilot/window-hide.log with pointer, PID,
+  app identity, frontmost/hidden state and AX error, then return code 3.
+- Reuse the TP04 300 ms quiet-window gate under a separate window-hide key to
+  coalesce repeated Trickpad dispatches and avoid hiding the exposed window
+  beneath the first hidden app. TP04 swipe functions, wrappers and bindings
+  remain unchanged byte-for-byte.
+- Add a real invocation test for duplicate suppression and rearming to the
+  existing CI targeting checks. Keep upstream Trickpad source unmodified.
+
+Verification boundary: CI validates compile, targeting and coalescing. The
+AppKit/AX fallback still requires a physical on-device double-tap check.

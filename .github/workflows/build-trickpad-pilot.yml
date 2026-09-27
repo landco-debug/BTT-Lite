@@ -95,7 +95,7 @@ jobs:
           Upstream: nweii/trickpad 0.14.0
           Commit: e16f7fcd1613b9df944957cbda0e69d8eaf19163
           Trickpad source is unmodified.
-          Custom components: TP04 swipe-repeat coalescing unchanged; TP10 hides the app owning the window under the pointer.
+          Custom components: TP04 swipe-repeat coalescing unchanged; TP11 window hide with AX fallback, duplicate-gesture guard and failure log.
           EOF
 
       - name: Smoke-check package
@@ -109,13 +109,13 @@ jobs:
           /usr/bin/grep -q 'three-finger-swipe-up = "script:~/bin/trickpad-reopen-tab-once"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-swipe-down = "script:~/bin/trickpad-close-tab-once"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-double-tap = "script:~/bin/trickpad-hide-hovered-dock-app"' pilot/config.toml
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip
-          test -s Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP11-Window-Hide.zip
+          test -s Trickpad-Pilot-0.14.0-TP11-Window-Hide.zip
 
       - name: Upload pilot
         uses: actions/upload-artifact@v4
         with:
-          name: Trickpad-Pilot-0.14.0-TP10-Window-Hide
-          path: Trickpad-Pilot-0.14.0-TP10-Window-Hide.zip
+          name: Trickpad-Pilot-0.14.0-TP11-Window-Hide
+          path: Trickpad-Pilot-0.14.0-TP11-Window-Hide.zip
           if-no-files-found: error
           retention-days: 7

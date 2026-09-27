@@ -31,6 +31,19 @@ static pid_t windowOwnerAtPoint(NSArray *windows, CGPoint point) {
     return 0;
 }
 
+static void recordHideFailure(CGPoint point, pid_t pid, NSRunningApplication *app, AXError axError) {
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/TrickpadPilot"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES
+                                               attributes:nil error:nil];
+    NSString *body = [NSString stringWithFormat:
+        @"date=%@ pointer={%.1f,%.1f} pid=%d bundle=%@ name=%@ frontmost=%@ hidden=%@ terminated=%@ axSetHidden=%d\n",
+        [NSDate date], point.x, point.y, pid, app.bundleIdentifier ?: @"<nil>",
+        app.localizedName ?: @"<nil>", app.active ? @"yes" : @"no",
+        app.hidden ? @"yes" : @"no", app.terminated ? @"yes" : @"no", axError];
+    [body writeToFile:[dir stringByAppendingPathComponent:@"window-hide.log"]
+          atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
 static int hideWindowApplication(void) {
     CGEventRef event = CGEventCreate(NULL);
     if (!event) { fprintf(stderr, "Cannot read pointer position.\n"); return 2; }
@@ -49,7 +62,18 @@ static int hideWindowApplication(void) {
         return 0;
     // Native app-specific hide avoids activation races and global key injection.
     if ([app hide]) return 0;
-    fprintf(stderr, "Could not hide application pid=%d.\n", pid);
+    // AppKit can reject a cross-process hide request. The already-authorized
+    // Accessibility helper can request that same target app's AXHidden state.
+    AXUIElementRef axApp = AXUIElementCreateApplication(pid);
+    AXError axError = axApp ? AXUIElementSetAttributeValue(axApp, kAXHiddenAttribute,
+                                                          kCFBooleanTrue) : kAXErrorInvalidUIElement;
+    if (axApp) CFRelease(axApp);
+    if (axError == kAXErrorSuccess) return 0;
+    // NSRunningApplication properties update on a turn of the main run loop.
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.08]];
+    if (app.hidden || app.terminated) return 0;
+    recordHideFailure(point, pid, app, axError);
+    fprintf(stderr, "Could not hide application pid=%d; details in ~/Library/Logs/TrickpadPilot/window-hide.log.\n", pid);
     return 3;
 }
 
@@ -61,6 +85,8 @@ static NSDictionary *testWindow(pid_t pid, int layer, double alpha, CGRect rect)
         (__bridge NSString *)kCGWindowBounds: CFBridgingRelease(CGRectCreateDictionaryRepresentation(rect))
     };
 }
+
+static int selfTestHideGate(void);
 
 static int selfTest(void) {
     NSArray *windows = @[
@@ -172,11 +198,27 @@ static int runSwipeAction(NSString *action) {
     return 0;
 }
 
+static int selfTestHideGate(void) {
+    NSString *action = [NSString stringWithFormat:@"window-hide-test-%d", getpid()];
+    NSString *path = nil;
+    if (!acquireSwipeGate(action, &path)) return 1;
+    NSString *ignored = nil;
+    if (acquireSwipeGate(action, &ignored)) { unlink(path.fileSystemRepresentation); return 1; }
+    holdSwipeGateUntilQuiet(path);
+    NSString *again = nil;
+    if (!acquireSwipeGate(action, &again)) return 1;
+    holdSwipeGateUntilQuiet(again);
+    puts("TP11 duplicate-hide gate: passed");
+    return 0;
+}
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         NSString *mode = argc > 1 ? [NSString stringWithUTF8String:argv[1]] : @"";
-        if ([mode isEqualToString:@"--self-test"]) return selfTest();
+        if ([mode isEqualToString:@"--self-test"]) {
+            int result = selfTest();
+            return result ? result : selfTestHideGate();
+        }
         BOOL request = [mode isEqualToString:@"--request-accessibility"];
         BOOL check = [mode isEqualToString:@"--check"];
         if (!ensureAccessibility(request)) {
@@ -187,6 +229,13 @@ int main(int argc, const char *argv[]) {
         if ([mode isEqualToString:@"close-once"]) return runSwipeAction(@"close");
         if ([mode isEqualToString:@"reopen-once"]) return runSwipeAction(@"reopen");
         if (mode.length) { fprintf(stderr, "Unknown argument.\n"); return 64; }
-        return hideWindowApplication();
+        // Trickpad may dispatch one physical double-tap more than once. Use
+        // the proven TP04 quiet-window gate with a separate action key so a
+        // repeated dispatch cannot hide the window newly revealed underneath.
+        NSString *lockPath = nil;
+        if (!acquireSwipeGate(@"window-hide", &lockPath)) return 0;
+        int result = hideWindowApplication();
+        holdSwipeGateUntilQuiet(lockPath);
+        return result;
     }
 }
