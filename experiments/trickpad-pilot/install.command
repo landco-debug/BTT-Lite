@@ -4,21 +4,15 @@ set -euo pipefail
 ROOT="${0:A:h}"
 APP_SRC="$ROOT/Trickpad.app"
 HELPER_SRC="$ROOT/bin/trickpad-hide-hovered-dock-app"
-CLOSE_SRC="$ROOT/bin/trickpad-close-tab-once"
-REOPEN_SRC="$ROOT/bin/trickpad-reopen-tab-once"
 CONFIG_SRC="$ROOT/config.toml"
 
 APP_DST="$HOME/Applications/Trickpad.app"
 HELPER_DST="$HOME/bin/trickpad-hide-hovered-dock-app"
-CLOSE_DST="$HOME/bin/trickpad-close-tab-once"
-REOPEN_DST="$HOME/bin/trickpad-reopen-tab-once"
 CONFIG_DIR="$HOME/.config/trickpad"
 CONFIG_DST="$CONFIG_DIR/config.toml"
 
 [[ -d "$APP_SRC" ]] || { echo "Missing $APP_SRC"; exit 1; }
 [[ -x "$HELPER_SRC" ]] || { echo "Missing $HELPER_SRC"; exit 1; }
-[[ -x "$CLOSE_SRC" ]] || { echo "Missing $CLOSE_SRC"; exit 1; }
-[[ -x "$REOPEN_SRC" ]] || { echo "Missing $REOPEN_SRC"; exit 1; }
 [[ -f "$CONFIG_SRC" ]] || { echo "Missing $CONFIG_SRC"; exit 1; }
 
 /usr/bin/codesign --verify --deep --strict "$APP_SRC"
@@ -30,9 +24,7 @@ mkdir -p "$HOME/Applications" "$HOME/bin" "$CONFIG_DIR"
 rm -rf "$APP_DST"
 /usr/bin/ditto "$APP_SRC" "$APP_DST"
 /bin/cp -f "$HELPER_SRC" "$HELPER_DST"
-/bin/cp -f "$CLOSE_SRC" "$CLOSE_DST"
-/bin/cp -f "$REOPEN_SRC" "$REOPEN_DST"
-/bin/chmod 755 "$HELPER_DST" "$CLOSE_DST" "$REOPEN_DST"
+/bin/chmod 755 "$HELPER_DST"
 
 if [[ -f "$CONFIG_DST" ]]; then
     stamp="$(/bin/date +%Y%m%d-%H%M%S)"
@@ -44,15 +36,11 @@ fi
 
 /usr/bin/xattr -dr com.apple.quarantine "$APP_DST" 2>/dev/null || true
 /usr/bin/xattr -d com.apple.quarantine "$HELPER_DST" 2>/dev/null || true
-/usr/bin/xattr -d com.apple.quarantine "$CLOSE_DST" 2>/dev/null || true
-/usr/bin/xattr -d com.apple.quarantine "$REOPEN_DST" 2>/dev/null || true
 
 echo
 echo "Installed:"
 echo "  $APP_DST"
 echo "  $HELPER_DST"
-echo "  $CLOSE_DST"
-echo "  $REOPEN_DST"
 echo "  $CONFIG_DST"
 echo
 echo "Opening Trickpad..."
@@ -61,10 +49,9 @@ echo "Opening Trickpad..."
 echo
 echo "Accessibility:"
 echo "  Trickpad and $HELPER_DST must be enabled."
-echo "  The helper path and identifier are unchanged from TP03."
 echo
 echo "Trackpad native setting required for the two 2-finger gestures:"
 echo "  System Settings -> Trackpad -> More Gestures -> Swipe between pages"
 echo "  -> Scroll left or right with two fingers."
 echo
-echo "Then choose Reload Settings in Trickpad."
+echo "After installation choose Reload Settings in Trickpad."

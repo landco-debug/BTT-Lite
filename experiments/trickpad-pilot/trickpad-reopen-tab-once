@@ -1,2 +1,0 @@
-#!/bin/zsh
-exec "$HOME/bin/trickpad-hide-hovered-dock-app" reopen-once

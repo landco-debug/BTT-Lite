@@ -38,7 +38,7 @@ jobs:
           ./scripts/check.sh
           /usr/bin/codesign --verify --deep --strict "build/Trickpad.app"
 
-      - name: Build short-lived pilot helper
+      - name: Build short-lived Dock helper
         run: |
           set -euo pipefail
           mkdir -p pilot/bin
@@ -56,10 +56,6 @@ jobs:
             --requirements '=designated => identifier "local.trickpad.dockhelper"' \
             pilot/bin/trickpad-hide-hovered-dock-app
 
-          /bin/cp experiments/trickpad-pilot/trickpad-close-tab-once pilot/bin/trickpad-close-tab-once
-          /bin/cp experiments/trickpad-pilot/trickpad-reopen-tab-once pilot/bin/trickpad-reopen-tab-once
-          /bin/chmod +x pilot/bin/trickpad-close-tab-once pilot/bin/trickpad-reopen-tab-once
-
           /usr/bin/codesign --verify --strict pilot/bin/trickpad-hide-hovered-dock-app
           /usr/bin/file pilot/bin/trickpad-hide-hovered-dock-app | /usr/bin/grep -q "arm64"
 
@@ -71,11 +67,12 @@ jobs:
           /bin/cp experiments/trickpad-pilot/install.command pilot/install.command
           /bin/chmod +x pilot/install.command
           cat > pilot/BUILD.txt <<'EOF'
-          Trickpad pilot
+          Trickpad pilot TP05
           Upstream: nweii/trickpad 0.14.0
           Commit: e16f7fcd1613b9df944957cbda0e69d8eaf19163
           Trickpad source is unmodified.
-          Custom component: one short-lived helper for Dock hide and swipe-repeat coalescing.
+          Only custom fix in this build: Dock double-tap helper pointer coordinate correction.
+          Three-finger swipe up/down bindings are unchanged from TP03.
           EOF
 
       - name: Smoke-check package
@@ -83,19 +80,17 @@ jobs:
           set -euo pipefail
           /usr/bin/codesign --verify --deep --strict pilot/Trickpad.app
           /usr/bin/codesign --verify --strict pilot/bin/trickpad-hide-hovered-dock-app
-          test -x pilot/bin/trickpad-close-tab-once
-          test -x pilot/bin/trickpad-reopen-tab-once
+          /usr/bin/grep -q 'three-finger-swipe-up = "cmd+shift+t"' pilot/config.toml
+          /usr/bin/grep -q 'three-finger-swipe-down = "cmd+w"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-click = "cmd+shift+v"' pilot/config.toml
-          /usr/bin/grep -q 'three-finger-swipe-up = "script:~/bin/trickpad-reopen-tab-once"' pilot/config.toml
-          /usr/bin/grep -q 'three-finger-swipe-down = "script:~/bin/trickpad-close-tab-once"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-double-tap = "script:~/bin/trickpad-hide-hovered-dock-app"' pilot/config.toml
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP04.zip
-          test -s Trickpad-Pilot-0.14.0-TP04.zip
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP05.zip
+          test -s Trickpad-Pilot-0.14.0-TP05.zip
 
       - name: Upload pilot
         uses: actions/upload-artifact@v4
         with:
-          name: Trickpad-Pilot-0.14.0-TP04
-          path: Trickpad-Pilot-0.14.0-TP04.zip
+          name: Trickpad-Pilot-0.14.0-TP05
+          path: Trickpad-Pilot-0.14.0-TP05.zip
           if-no-files-found: error
           retention-days: 7

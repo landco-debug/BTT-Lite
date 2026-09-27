@@ -695,3 +695,27 @@ Next on-device gate:
 - Install TP04 over TP03.
 - Keep BetterTouchTool fully quit during comparison.
 - Retest swipe up/down single-fire behavior and the Dock double-tap action.
+
+
+## TP05 — Keep swipe behavior unchanged; fix only Dock double-tap
+
+Status: implemented by explicit user request; CI validation is triggered by this commit.
+
+User correction:
+- Do not modify 3-finger swipe up/down behavior. The earlier double-open/double-close observation may have been caused by another program and the user reports the swipes now appear to work correctly.
+- Only the 3-finger double-tap Dock action should be fixed.
+
+Changes:
+- Restored both Magic Mouse and trackpad 3-finger swipe up/down bindings exactly to the TP03 direct shortcuts:
+  - up → ⇧⌘T
+  - down → ⌘W
+- Removed the TP04 one-shot swipe wrapper scripts from the repository and package.
+- Restored the TP03 installer structure; no swipe helper is installed.
+- Kept exactly one functional change relative to TP03: the Dock helper now gets the pointer position using Quartz CGEventGetLocation before AXUIElementCopyElementAtPosition. This fixes the coordinate-system mismatch that produced exit code 2.
+- Trickpad itself remains unmodified upstream 0.14.0.
+
+Retest contract:
+1. Install TP05 over the current pilot.
+2. Do not evaluate or tune the 3-finger swipe up/down gestures as part of this change; they are intentionally unchanged.
+3. Put the pointer directly over an application icon in Dock and perform the 3-finger double-tap.
+4. Expected: the target Dock app is activated and then hidden with ⌘H; no exit-code-2 popover.
