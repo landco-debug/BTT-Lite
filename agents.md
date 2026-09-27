@@ -676,3 +676,22 @@ Retest contract:
 3. Reload Trickpad settings.
 4. Perform 10 deliberate swipe-up and 10 swipe-down gestures on the device being tested; each physical gesture should create exactly one ⇧⌘T or ⌘W.
 5. Put the pointer directly over a Dock app icon and perform the 3-finger double-tap; the old exit-code-2 popover should no longer appear and the target app should activate then hide.
+
+
+## TP04.1 — Green CI for the first real-device fixes
+
+Status: complete.
+
+Validation:
+- GitHub Actions run `36281163234` completed successfully.
+- Upstream Trickpad checks passed unchanged.
+- The revised short-lived helper compiled and passed strict code-sign verification.
+- Package smoke checks verified the one-shot swipe wrappers and all expected TOML bindings.
+- Artifact: `Trickpad-Pilot-0.14.0-TP04`, Actions artifact ID `10918654528`.
+- GitHub outer artifact SHA-256: `995132509f71230dae197710dd8cd5b666151139f053ddeab7b1f7425284ca57`.
+- Ready-to-install inner ZIP SHA-256: `602a5be8b02965ebedbd3ee51e99c161b0017351774e0bfb4a45f9e170659aca`.
+
+Next on-device gate:
+- Install TP04 over TP03.
+- Keep BetterTouchTool fully quit during comparison.
+- Retest swipe up/down single-fire behavior and the Dock double-tap action.
