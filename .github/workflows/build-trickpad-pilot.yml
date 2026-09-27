@@ -67,11 +67,11 @@ jobs:
           /bin/cp experiments/trickpad-pilot/install.command pilot/install.command
           /bin/chmod +x pilot/install.command
           cat > pilot/BUILD.txt <<'EOF'
-          Trickpad pilot TP06
+          Trickpad pilot TP07
           Upstream: nweii/trickpad 0.14.0
           Commit: e16f7fcd1613b9df944957cbda0e69d8eaf19163
           Trickpad source is unmodified.
-          Only custom fix in this build: Dock double-tap helper pointer coordinate correction.
+          Only custom fix in this build: Dock double-tap helper uses Dock AXSelectedChildren with recursive fallback.
           Three-finger swipe up/down bindings are unchanged from TP03.
           EOF
 
@@ -84,13 +84,13 @@ jobs:
           /usr/bin/grep -q 'three-finger-swipe-down = "cmd+w"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-click = "cmd+shift+v"' pilot/config.toml
           /usr/bin/grep -q 'three-finger-double-tap = "script:~/bin/trickpad-hide-hovered-dock-app"' pilot/config.toml
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP06.zip
-          test -s Trickpad-Pilot-0.14.0-TP06.zip
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent pilot Trickpad-Pilot-0.14.0-TP07.zip
+          test -s Trickpad-Pilot-0.14.0-TP07.zip
 
       - name: Upload pilot
         uses: actions/upload-artifact@v4
         with:
-          name: Trickpad-Pilot-0.14.0-TP06
-          path: Trickpad-Pilot-0.14.0-TP06.zip
+          name: Trickpad-Pilot-0.14.0-TP07
+          path: Trickpad-Pilot-0.14.0-TP07.zip
           if-no-files-found: error
           retention-days: 7

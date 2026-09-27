@@ -749,3 +749,32 @@ Retest contract:
 3. Put the pointer visibly over an application icon in Dock.
 4. Perform the trackpad 3-finger double-tap.
 5. Expected: the icon is resolved from Dock's own Accessibility tree, the app is activated, then ⌘H hides it; no exit-code-2 popover.
+
+
+## TP07 — Stop guessing pointer geometry; use Dock hover state
+
+Status: implemented after TP06 reproduced exit code 2 on the real Mac; CI validation is triggered by this commit.
+
+Why the approach changed:
+- Three successive versions tried to infer the Dock target from system-wide hit-testing or from assumed Dock-tree geometry.
+- TP06 proved that simply changing coordinates or assuming a direct AXList child is not enough on this macOS Sequoia machine.
+- The new primary mechanism is semantic, not geometric: Dock exposes its currently hovered item through `AXSelectedChildren`. This is the same class of mechanism used by established Dock-hover utilities.
+- Geometry is now only a fallback and traverses the whole Dock Accessibility tree recursively instead of assuming one fixed hierarchy.
+
+TP07 behavior:
+- 3-finger swipe up/down bindings remain byte-for-byte the direct bindings already accepted by the user: up = ⇧⌘T, down = ⌘W. No debounce, wrapper or sensitivity change.
+- On 3-finger double-tap the short-lived helper:
+  1. resolves Dock PID;
+  2. recursively finds a non-empty `AXSelectedChildren`;
+  3. accepts only subrole `AXApplicationDockItem`;
+  4. performs AXPress on that exact hovered item;
+  5. falls back to the item's AXURL / running application activation if AXPress fails;
+  6. sends ⌘H after activation.
+- If semantic hover resolution is unavailable, a recursive full-tree geometry fallback searches all `AXApplicationDockItem` elements. It does not assume Dock's list is a direct child.
+- If the helper still fails, it writes a one-shot diagnostic file to `~/Library/Logs/TrickpadPilot/dock-helper.log` containing the actual Dock PID, selected-child observations, pointer coordinates, discovered Dock-item frames and nearest distance. This prevents another blind rebuild.
+- The diagnostic is written only on failure; there is no resident logger or background process.
+
+Retest:
+- Install TP07 over the current pilot.
+- Test only 3-finger double-tap over an application icon in Dock.
+- If it still returns an error, do not redesign again from theory: read `~/Library/Logs/TrickpadPilot/dock-helper.log` from the user's Mac and fix from that concrete runtime data.

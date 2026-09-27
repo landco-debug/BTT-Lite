@@ -1,16 +1,40 @@
 // Short-lived helper for one BTT-compatible action:
 // activate the application icon currently hovered in Dock, then send Command-H.
-// It is launched only by Trickpad's 3-finger double-tap binding.
 //
-// TP06 deliberately does NOT change any swipe binding. The Dock action no longer
-// relies on AXUIElementCopyElementAtPosition(systemWide,...), because that path
-// returned no Dock item on the user's macOS Sequoia setup. Instead we inspect
-// Dock's own Accessibility tree and match the pointer against AXApplicationDockItem
-// frames directly.
+// TP07: do not infer "hovered" from pointer geometry first. The Dock publishes
+// its current hovered item through AXSelectedChildren. Use that semantic state
+// directly, then fall back to a recursive geometry scan only if needed.
+// The helper is launched only by Trickpad's 3-finger double-tap binding.
 
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <unistd.h>
+
+static NSMutableString *gDebug = nil;
+
+static void debugLine(NSString *format, ...) {
+    if (!gDebug) gDebug = [NSMutableString string];
+    va_list args;
+    va_start(args, format);
+    NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    [gDebug appendFormat:@"%@\n", line];
+}
+
+static void writeFailureLog(void) {
+    if (!gDebug.length) return;
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/TrickpadPilot"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    NSString *path = [dir stringByAppendingPathComponent:@"dock-helper.log"];
+    NSString *stamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
+                                                     dateStyle:NSDateFormatterShortStyle
+                                                     timeStyle:NSDateFormatterMediumStyle];
+    NSString *body = [NSString stringWithFormat:@"[%@]\n%@\n", stamp, gDebug];
+    [body writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
 
 static BOOL ensureAccessibility(BOOL prompt) {
     NSDictionary *options = @{
@@ -19,12 +43,20 @@ static BOOL ensureAccessibility(BOOL prompt) {
     return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
 }
 
-static NSString *copyStringAttribute(AXUIElementRef element, CFStringRef attribute) {
+static CFTypeRef copyAttribute(AXUIElementRef element, CFStringRef attribute) {
+    if (!element) return NULL;
     CFTypeRef value = NULL;
-    if (AXUIElementCopyAttributeValue(element, attribute, &value) != kAXErrorSuccess || value == NULL) {
-        return nil;
+    AXError err = AXUIElementCopyAttributeValue(element, attribute, &value);
+    if (err != kAXErrorSuccess || value == NULL) {
+        if (value) CFRelease(value);
+        return NULL;
     }
+    return value;
+}
 
+static NSString *copyStringAttribute(AXUIElementRef element, CFStringRef attribute) {
+    CFTypeRef value = copyAttribute(element, attribute);
+    if (!value) return nil;
     NSString *result = nil;
     if (CFGetTypeID(value) == CFStringGetTypeID()) {
         result = [(__bridge NSString *)value copy];
@@ -33,24 +65,41 @@ static NSString *copyStringAttribute(AXUIElementRef element, CFStringRef attribu
     return result;
 }
 
+static NSURL *copyURLAttribute(AXUIElementRef element) {
+    CFTypeRef value = copyAttribute(element, kAXURLAttribute);
+    if (!value) return nil;
+    NSURL *result = nil;
+    if (CFGetTypeID(value) == CFURLGetTypeID()) {
+        result = [(__bridge NSURL *)value copy];
+    }
+    CFRelease(value);
+    return result;
+}
+
 static CFArrayRef copyChildren(AXUIElementRef element) {
-    CFTypeRef value = NULL;
-    if (AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, &value) != kAXErrorSuccess ||
-        value == NULL ||
-        CFGetTypeID(value) != CFArrayGetTypeID()) {
-        if (value) CFRelease(value);
+    CFTypeRef value = copyAttribute(element, kAXChildrenAttribute);
+    if (!value) return NULL;
+    if (CFGetTypeID(value) != CFArrayGetTypeID()) {
+        CFRelease(value);
         return NULL;
     }
-    return (CFArrayRef)value; // caller releases
+    return (CFArrayRef)value;
+}
+
+static CFArrayRef copySelectedChildren(AXUIElementRef element) {
+    CFTypeRef value = copyAttribute(element, kAXSelectedChildrenAttribute);
+    if (!value) return NULL;
+    if (CFGetTypeID(value) != CFArrayGetTypeID()) {
+        CFRelease(value);
+        return NULL;
+    }
+    return (CFArrayRef)value;
 }
 
 static BOOL copyFrame(AXUIElementRef element, CGRect *frameOut) {
-    CFTypeRef positionValue = NULL;
-    CFTypeRef sizeValue = NULL;
-
-    AXError p = AXUIElementCopyAttributeValue(element, kAXPositionAttribute, &positionValue);
-    AXError s = AXUIElementCopyAttributeValue(element, kAXSizeAttribute, &sizeValue);
-    if (p != kAXErrorSuccess || s != kAXErrorSuccess || !positionValue || !sizeValue) {
+    CFTypeRef positionValue = copyAttribute(element, kAXPositionAttribute);
+    CFTypeRef sizeValue = copyAttribute(element, kAXSizeAttribute);
+    if (!positionValue || !sizeValue) {
         if (positionValue) CFRelease(positionValue);
         if (sizeValue) CFRelease(sizeValue);
         return NO;
@@ -59,16 +108,15 @@ static BOOL copyFrame(AXUIElementRef element, CGRect *frameOut) {
     BOOL ok = NO;
     if (CFGetTypeID(positionValue) == AXValueGetTypeID() &&
         CFGetTypeID(sizeValue) == AXValueGetTypeID()) {
-        AXValueRef pValue = (AXValueRef)positionValue;
-        AXValueRef sValue = (AXValueRef)sizeValue;
         CGPoint origin = CGPointZero;
         CGSize size = CGSizeZero;
-
-        if (AXValueGetType(pValue) == kAXValueCGPointType &&
-            AXValueGetType(sValue) == kAXValueCGSizeType &&
-            AXValueGetValue(pValue, kAXValueCGPointType, &origin) &&
-            AXValueGetValue(sValue, kAXValueCGSizeType, &size) &&
-            size.width > 0.0 && size.height > 0.0) {
+        AXValueRef p = (AXValueRef)positionValue;
+        AXValueRef s = (AXValueRef)sizeValue;
+        if (AXValueGetType(p) == kAXValueCGPointType &&
+            AXValueGetType(s) == kAXValueCGSizeType &&
+            AXValueGetValue(p, kAXValueCGPointType, &origin) &&
+            AXValueGetValue(s, kAXValueCGSizeType, &size) &&
+            size.width > 0 && size.height > 0) {
             *frameOut = CGRectMake(origin.x, origin.y, size.width, size.height);
             ok = YES;
         }
@@ -79,125 +127,190 @@ static BOOL copyFrame(AXUIElementRef element, CGRect *frameOut) {
     return ok;
 }
 
-static CGFloat distanceFromPointToRect(CGPoint point, CGRect rect) {
-    CGFloat dx = 0.0;
+static BOOL isApplicationDockItem(AXUIElementRef item) {
+    NSString *subrole = copyStringAttribute(item, kAXSubroleAttribute);
+    return [subrole isEqualToString:@"AXApplicationDockItem"];
+}
+
+static AXUIElementRef copySelectedApplicationDockItemRecursive(AXUIElementRef element,
+                                                               int depth,
+                                                               int *visited) {
+    if (!element || depth > 8 || *visited > 512) return NULL;
+    (*visited)++;
+
+    CFArrayRef selected = copySelectedChildren(element);
+    if (selected) {
+        CFIndex count = CFArrayGetCount(selected);
+        if (count > 0) {
+            AXUIElementRef candidate = (AXUIElementRef)CFArrayGetValueAtIndex(selected, 0);
+            NSString *role = copyStringAttribute(candidate, kAXRoleAttribute);
+            NSString *subrole = copyStringAttribute(candidate, kAXSubroleAttribute);
+            NSString *title = copyStringAttribute(candidate, kAXTitleAttribute);
+            debugLine(@"selected child depth=%d role=%@ subrole=%@ title=%@",
+                      depth, role ?: @"<nil>", subrole ?: @"<nil>", title ?: @"<nil>");
+            if ([subrole isEqualToString:@"AXApplicationDockItem"]) {
+                CFRetain(candidate);
+                CFRelease(selected);
+                return candidate;
+            }
+        }
+        CFRelease(selected);
+    }
+
+    CFArrayRef children = copyChildren(element);
+    if (!children) return NULL;
+
+    CFIndex count = CFArrayGetCount(children);
+    for (CFIndex i = 0; i < count; i++) {
+        AXUIElementRef child = (AXUIElementRef)CFArrayGetValueAtIndex(children, i);
+        AXUIElementRef found = copySelectedApplicationDockItemRecursive(child, depth + 1, visited);
+        if (found) {
+            CFRelease(children);
+            return found;
+        }
+    }
+
+    CFRelease(children);
+    return NULL;
+}
+
+typedef struct {
+    CGPoint pointer;
+    AXUIElementRef exact;
+    AXUIElementRef nearest;
+    CGFloat nearestDistance;
+    int appItemCount;
+    int visited;
+} GeometrySearch;
+
+static CGFloat distancePointToRect(CGPoint point, CGRect rect) {
+    CGFloat dx = 0;
     if (point.x < CGRectGetMinX(rect)) dx = CGRectGetMinX(rect) - point.x;
     else if (point.x > CGRectGetMaxX(rect)) dx = point.x - CGRectGetMaxX(rect);
 
-    CGFloat dy = 0.0;
+    CGFloat dy = 0;
     if (point.y < CGRectGetMinY(rect)) dy = CGRectGetMinY(rect) - point.y;
     else if (point.y > CGRectGetMaxY(rect)) dy = point.y - CGRectGetMaxY(rect);
 
     return hypot(dx, dy);
 }
 
-static AXUIElementRef copyHoveredDockApplicationItem(void) {
+static void searchDockGeometryRecursive(AXUIElementRef element, int depth, GeometrySearch *state) {
+    if (!element || depth > 8 || state->visited > 512 || state->exact) return;
+    state->visited++;
+
+    NSString *role = copyStringAttribute(element, kAXRoleAttribute);
+    NSString *subrole = copyStringAttribute(element, kAXSubroleAttribute);
+    if ([role isEqualToString:(__bridge NSString *)kAXDockItemRole] &&
+        [subrole isEqualToString:@"AXApplicationDockItem"]) {
+        CGRect frame = CGRectZero;
+        if (copyFrame(element, &frame)) {
+            state->appItemCount++;
+            CGFloat d = distancePointToRect(state->pointer, frame);
+            NSString *title = copyStringAttribute(element, kAXTitleAttribute);
+            debugLine(@"app item title=%@ frame={%.1f,%.1f %.1fx%.1f} distance=%.1f",
+                      title ?: @"<nil>",
+                      frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, d);
+
+            if (CGRectContainsPoint(frame, state->pointer)) {
+                state->exact = (AXUIElementRef)CFRetain(element);
+                return;
+            }
+            if (d < state->nearestDistance) {
+                if (state->nearest) CFRelease(state->nearest);
+                state->nearest = (AXUIElementRef)CFRetain(element);
+                state->nearestDistance = d;
+            }
+        }
+    }
+
+    CFArrayRef children = copyChildren(element);
+    if (!children) return;
+    CFIndex count = CFArrayGetCount(children);
+    for (CFIndex i = 0; i < count && !state->exact; i++) {
+        AXUIElementRef child = (AXUIElementRef)CFArrayGetValueAtIndex(children, i);
+        searchDockGeometryRecursive(child, depth + 1, state);
+    }
+    CFRelease(children);
+}
+
+static AXUIElementRef copyHoveredDockApplicationItem(AXUIElementRef dockRoot) {
+    int visited = 0;
+    AXUIElementRef selected = copySelectedApplicationDockItemRecursive(dockRoot, 0, &visited);
+    debugLine(@"selected-state traversal visited=%d found=%@", visited, selected ? @"yes" : @"no");
+    if (selected) return selected;
+
     CGEventRef pointerEvent = CGEventCreate(NULL);
     if (!pointerEvent) return NULL;
     CGPoint pointer = CGEventGetLocation(pointerEvent);
     CFRelease(pointerEvent);
+    debugLine(@"pointer CG={%.1f,%.1f}", pointer.x, pointer.y);
 
-    NSArray<NSRunningApplication *> *dockApps =
-        [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"];
-    NSRunningApplication *dockApp = dockApps.firstObject;
-    if (!dockApp) return NULL;
+    GeometrySearch state = {
+        .pointer = pointer,
+        .exact = NULL,
+        .nearest = NULL,
+        .nearestDistance = CGFLOAT_MAX,
+        .appItemCount = 0,
+        .visited = 0
+    };
 
-    AXUIElementRef dockRoot = AXUIElementCreateApplication(dockApp.processIdentifier);
-    if (!dockRoot) return NULL;
+    searchDockGeometryRecursive(dockRoot, 0, &state);
+    debugLine(@"geometry traversal visited=%d appItems=%d exact=%@ nearestDistance=%.1f",
+              state.visited, state.appItemCount, state.exact ? @"yes" : @"no",
+              state.nearestDistance);
 
-    CFArrayRef rootChildren = copyChildren(dockRoot);
-    if (!rootChildren) {
-        CFRelease(dockRoot);
-        return NULL;
+    if (state.exact) {
+        if (state.nearest) CFRelease(state.nearest);
+        return state.exact;
     }
 
-    AXUIElementRef dockList = NULL;
-    CFIndex rootCount = CFArrayGetCount(rootChildren);
-    for (CFIndex i = 0; i < rootCount; i++) {
-        AXUIElementRef child = (AXUIElementRef)CFArrayGetValueAtIndex(rootChildren, i);
-        NSString *role = copyStringAttribute(child, kAXRoleAttribute);
-        if ([role isEqualToString:(__bridge NSString *)kAXListRole]) {
-            dockList = (AXUIElementRef)CFRetain(child);
-            break;
-        }
-    }
-    CFRelease(rootChildren);
-    CFRelease(dockRoot);
-    if (!dockList) return NULL;
-
-    CFArrayRef items = copyChildren(dockList);
-    CFRelease(dockList);
-    if (!items) return NULL;
-
-    AXUIElementRef exact = NULL;
-    AXUIElementRef nearest = NULL;
-    CGFloat nearestDistance = CGFLOAT_MAX;
-
-    CFIndex itemCount = CFArrayGetCount(items);
-    for (CFIndex i = 0; i < itemCount; i++) {
-        AXUIElementRef item = (AXUIElementRef)CFArrayGetValueAtIndex(items, i);
-        NSString *role = copyStringAttribute(item, kAXRoleAttribute);
-        if (![role isEqualToString:(__bridge NSString *)kAXDockItemRole]) continue;
-
-        NSString *subrole = copyStringAttribute(item, kAXSubroleAttribute);
-        if (![subrole isEqualToString:@"AXApplicationDockItem"]) continue;
-
-        CGRect frame = CGRectZero;
-        if (!copyFrame(item, &frame)) continue;
-
-        if (CGRectContainsPoint(frame, pointer)) {
-            exact = (AXUIElementRef)CFRetain(item);
-            break;
-        }
-
-        CGFloat distance = distanceFromPointToRect(pointer, frame);
-        if (distance < nearestDistance) {
-            nearestDistance = distance;
-            if (nearest) CFRelease(nearest);
-            nearest = (AXUIElementRef)CFRetain(item);
-        }
+    if (state.nearest && state.nearestDistance <= 28.0) {
+        return state.nearest;
     }
 
-    CFRelease(items);
-
-    if (exact) {
-        if (nearest) CFRelease(nearest);
-        return exact;
-    }
-
-    // Dock magnification / label animation can make the AX frame lag the cursor
-    // by a few points. Accept only a very close application item; never jump
-    // across a visible gap to a different icon.
-    if (nearest && nearestDistance <= 14.0) return nearest;
-    if (nearest) CFRelease(nearest);
+    if (state.nearest) CFRelease(state.nearest);
     return NULL;
 }
 
-static void sendCommandH(void) {
+static void postCommandH(void) {
     CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
     if (!source) return;
 
-    const CGKeyCode commandKey = 55;
-    const CGKeyCode hKey = 4;
-    CGEventRef cmdDown = CGEventCreateKeyboardEvent(source, commandKey, true);
-    CGEventRef hDown = CGEventCreateKeyboardEvent(source, hKey, true);
-    CGEventRef hUp = CGEventCreateKeyboardEvent(source, hKey, false);
-    CGEventRef cmdUp = CGEventCreateKeyboardEvent(source, commandKey, false);
+    CGEventRef down = CGEventCreateKeyboardEvent(source, (CGKeyCode)4, true);
+    CGEventRef up = CGEventCreateKeyboardEvent(source, (CGKeyCode)4, false);
+    if (down && up) {
+        CGEventSetFlags(down, kCGEventFlagMaskCommand);
+        CGEventSetFlags(up, kCGEventFlagMaskCommand);
+        CGEventPost(kCGHIDEventTap, down);
+        CGEventPost(kCGHIDEventTap, up);
+    }
+    if (down) CFRelease(down);
+    if (up) CFRelease(up);
+    CFRelease(source);
+}
 
-    if (cmdDown && hDown && hUp && cmdUp) {
-        CGEventSetFlags(hDown, kCGEventFlagMaskCommand);
-        CGEventSetFlags(hUp, kCGEventFlagMaskCommand);
-        CGEventPost(kCGHIDEventTap, cmdDown);
-        CGEventPost(kCGHIDEventTap, hDown);
-        CGEventPost(kCGHIDEventTap, hUp);
-        CGEventPost(kCGHIDEventTap, cmdUp);
+static BOOL activateDockItem(AXUIElementRef item) {
+    AXError press = AXUIElementPerformAction(item, kAXPressAction);
+    debugLine(@"AXPress result=%d", press);
+    if (press == kAXErrorSuccess) return YES;
+
+    NSURL *url = copyURLAttribute(item);
+    debugLine(@"AXURL=%@", url.absoluteString ?: @"<nil>");
+    if (!url) return NO;
+
+    NSBundle *bundle = [NSBundle bundleWithURL:url];
+    NSString *bundleID = bundle.bundleIdentifier;
+    if (bundleID.length > 0) {
+        NSArray<NSRunningApplication *> *apps =
+            [NSRunningApplication runningApplicationsWithBundleIdentifier:bundleID];
+        NSRunningApplication *running = apps.firstObject;
+        if (running) {
+            return [running activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+        }
     }
 
-    if (cmdDown) CFRelease(cmdDown);
-    if (hDown) CFRelease(hDown);
-    if (hUp) CFRelease(hUp);
-    if (cmdUp) CFRelease(cmdUp);
-    CFRelease(source);
+    return [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 int main(int argc, const char *argv[]) {
@@ -205,9 +318,12 @@ int main(int argc, const char *argv[]) {
         BOOL request = argc > 1 && strcmp(argv[1], "--request-accessibility") == 0;
         BOOL checkOnly = argc > 1 && strcmp(argv[1], "--check") == 0;
 
-        if (!ensureAccessibility(request)) {
+        BOOL trusted = ensureAccessibility(request);
+        debugLine(@"trusted=%@", trusted ? @"yes" : @"no");
+        if (!trusted) {
             if (checkOnly || request)
                 fprintf(stderr, "Accessibility permission is not granted.\n");
+            writeFailureLog();
             return 77;
         }
         if (checkOnly) {
@@ -215,21 +331,46 @@ int main(int argc, const char *argv[]) {
             return 0;
         }
 
-        AXUIElementRef dockItem = copyHoveredDockApplicationItem();
-        if (!dockItem) {
-            fprintf(stderr, "No application Dock item found under the pointer.\n");
+        NSArray<NSRunningApplication *> *dockApps =
+            [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"];
+        NSRunningApplication *dockApp = dockApps.firstObject;
+        if (!dockApp) {
+            debugLine(@"Dock process not found");
+            writeFailureLog();
+            return 2;
+        }
+        debugLine(@"Dock pid=%d", dockApp.processIdentifier);
+
+        AXUIElementRef dockRoot = AXUIElementCreateApplication(dockApp.processIdentifier);
+        if (!dockRoot) {
+            debugLine(@"AXUIElementCreateApplication failed");
+            writeFailureLog();
             return 2;
         }
 
-        AXError press = AXUIElementPerformAction(dockItem, kAXPressAction);
+        AXUIElementRef dockItem = copyHoveredDockApplicationItem(dockRoot);
+        CFRelease(dockRoot);
+
+        if (!dockItem) {
+            debugLine(@"No hovered application Dock item resolved");
+            writeFailureLog();
+            fprintf(stderr, "No hovered application Dock item resolved.\n");
+            return 2;
+        }
+
+        NSString *title = copyStringAttribute(dockItem, kAXTitleAttribute);
+        debugLine(@"resolved title=%@", title ?: @"<nil>");
+
+        BOOL activated = activateDockItem(dockItem);
         CFRelease(dockItem);
-        if (press != kAXErrorSuccess) {
-            fprintf(stderr, "Could not activate the Dock item (AX error %d).\n", press);
+        if (!activated) {
+            debugLine(@"activation failed");
+            writeFailureLog();
             return 3;
         }
 
         usleep(180000);
-        sendCommandH();
+        postCommandH();
         return 0;
     }
 }
