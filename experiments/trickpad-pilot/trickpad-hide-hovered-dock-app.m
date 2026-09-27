@@ -1,13 +1,17 @@
 // Short-lived helper for one BTT-compatible action:
 // activate the application icon currently hovered in Dock, then send Command-H.
 //
-// TP07: do not infer "hovered" from pointer geometry first. The Dock publishes
+// TP08 combines the accepted TP04 swipe coalescing with the TP07 Dock fix.
+// Dock handling: do not infer "hovered" from pointer geometry first. The Dock publishes
 // its current hovered item through AXSelectedChildren. Use that semantic state
 // directly, then fall back to a recursive geometry scan only if needed.
 // The helper is launched only by Trickpad's 3-finger double-tap binding.
 
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
+#import <fcntl.h>
+#import <sys/stat.h>
+#import <sys/time.h>
 #import <unistd.h>
 
 static NSMutableString *gDebug = nil;
@@ -273,6 +277,90 @@ static AXUIElementRef copyHoveredDockApplicationItem(AXUIElementRef dockRoot) {
     return NULL;
 }
 
+
+static const useconds_t kSwipeQuietWindowUS = 300000;
+
+static void postShortcut(CGKeyCode keyCode, CGEventFlags flags) {
+    CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+    if (!source) return;
+
+    CGEventRef down = CGEventCreateKeyboardEvent(source, keyCode, true);
+    CGEventRef up = CGEventCreateKeyboardEvent(source, keyCode, false);
+    if (down && up) {
+        CGEventSetFlags(down, flags);
+        CGEventSetFlags(up, flags);
+        CGEventPost(kCGHIDEventTap, down);
+        CGEventPost(kCGHIDEventTap, up);
+    }
+
+    if (down) CFRelease(down);
+    if (up) CFRelease(up);
+    CFRelease(source);
+}
+
+static NSString *lockPathForAction(NSString *action) {
+    return [NSString stringWithFormat:@"/tmp/local.trickpad.%u.%@.lock",
+            (unsigned)getuid(), action];
+}
+
+static BOOL acquireSwipeGate(NSString *action, NSString **lockPathOut) {
+    NSString *path = lockPathForAction(action);
+    const char *fs = path.fileSystemRepresentation;
+    int fd = open(fs, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (fd >= 0) {
+        close(fd);
+        *lockPathOut = path;
+        return YES;
+    }
+
+    // Repeated dispatch from the same continuing Trickpad swipe extends the
+    // current quiet window, but does not emit a second shortcut.
+    struct timeval tv[2];
+    gettimeofday(&tv[0], NULL);
+    tv[1] = tv[0];
+    utimes(fs, tv);
+    return NO;
+}
+
+static void holdSwipeGateUntilQuiet(NSString *lockPath) {
+    const char *fs = lockPath.fileSystemRepresentation;
+
+    for (;;) {
+        struct stat st;
+        if (stat(fs, &st) != 0) break;
+
+        struct timeval now;
+        gettimeofday(&now, NULL);
+
+        double modified =
+            (double)st.st_mtimespec.tv_sec +
+            (double)st.st_mtimespec.tv_nsec / 1000000000.0;
+        double current =
+            (double)now.tv_sec +
+            (double)now.tv_usec / 1000000.0;
+
+        if ((current - modified) * 1000000.0 >= kSwipeQuietWindowUS) break;
+        usleep(25000);
+    }
+
+    unlink(fs);
+}
+
+static int runSwipeAction(NSString *action) {
+    NSString *lockPath = nil;
+    if (!acquireSwipeGate(action, &lockPath)) return 0;
+
+    if ([action isEqualToString:@"close"]) {
+        postShortcut((CGKeyCode)13, kCGEventFlagMaskCommand); // ⌘W
+    } else {
+        postShortcut((CGKeyCode)17,
+                     kCGEventFlagMaskCommand | kCGEventFlagMaskShift); // ⇧⌘T
+    }
+
+    holdSwipeGateUntilQuiet(lockPath);
+    return 0;
+}
+
 static void postCommandH(void) {
     CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
     if (!source) return;
@@ -315,8 +403,9 @@ static BOOL activateDockItem(AXUIElementRef item) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        BOOL request = argc > 1 && strcmp(argv[1], "--request-accessibility") == 0;
-        BOOL checkOnly = argc > 1 && strcmp(argv[1], "--check") == 0;
+        NSString *mode = argc > 1 ? [NSString stringWithUTF8String:argv[1]] : @"";
+        BOOL request = [mode isEqualToString:@"--request-accessibility"];
+        BOOL checkOnly = [mode isEqualToString:@"--check"];
 
         BOOL trusted = ensureAccessibility(request);
         debugLine(@"trusted=%@", trusted ? @"yes" : @"no");
@@ -330,6 +419,9 @@ int main(int argc, const char *argv[]) {
             printf("trusted\n");
             return 0;
         }
+
+        if ([mode isEqualToString:@"close-once"]) return runSwipeAction(@"close");
+        if ([mode isEqualToString:@"reopen-once"]) return runSwipeAction(@"reopen");
 
         NSArray<NSRunningApplication *> *dockApps =
             [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"];
